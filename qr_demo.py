@@ -627,10 +627,13 @@ def _read_qr_image_cv2(img):
     Returns (matrix, version) or (None, None) if cv2 is unavailable or
     detection fails.
     """
+    # Broad except: on servers (e.g. Streamlit Community Cloud) the regular
+    # opencv-python wheel fails to import with OSError on missing libGL —
+    # we want to cleanly fall back to the naive reader rather than crash.
     try:
         import cv2
         import numpy as np
-    except ImportError:
+    except (ImportError, OSError):
         return None, None
 
     if img.mode != "L":

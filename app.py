@@ -547,6 +547,25 @@ with tab2:
     **Test it:** Generate & Corrupt → set errors above scanner limit → Download → Upload here
     """)
 
+    # Surface whether the robust cv2 pipeline is available. On hosts without
+    # opencv-python-headless the reader silently falls back to a naive
+    # axis-aligned scanner that can't handle phone photos — this caption
+    # makes the degraded mode visible instead of mysterious.
+    try:
+        import cv2 as _cv2
+        _has_aruco = hasattr(_cv2, "QRCodeDetectorAruco")
+        st.caption(
+            f"📷 Phone-photo pipeline: **enabled** "
+            f"(OpenCV {_cv2.__version__}"
+            f"{', Aruco detector' if _has_aruco else ', classical detector only'})"
+        )
+    except Exception as _e:
+        st.caption(
+            "📷 Phone-photo pipeline: **disabled** — OpenCV not available. "
+            "Uploads must be clean, axis-aligned QR images (e.g. downloaded from Tab 1). "
+            "To enable phone photos, add `opencv-python-headless>=4.8` to `requirements.txt`."
+        )
+
     uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
 
     if uploaded is not None:

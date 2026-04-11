@@ -1,3 +1,9 @@
-streamlit
-Pillow
-numpy
+streamlit>=1.36
+numpy>=1.26
+Pillow>=10.0
+# Headless build is required on Streamlit Community Cloud — the regular
+# opencv-python package depends on libGL.so.1 which is not present on the
+# cloud's base image, causing ImportError at module load.
+# Version >= 4.7 is required for cv2.QRCodeDetectorAruco, which is the
+# robust detector the phone-photo pipeline relies on.
+opencv-python-headless>=4.8
