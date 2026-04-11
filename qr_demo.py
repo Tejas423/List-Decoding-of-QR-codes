@@ -8,6 +8,9 @@ GF(2^8), same generator polynomial, same format/version bits, same data
 placement and block interleaving.
 
 Requires: PIL/Pillow, wu_qr.py
+Optional: opencv-python (enables robust phone-photo decoding via perspective
+unwarp + adaptive thresholding; falls back to a naive axis-aligned reader
+when unavailable).
 """
 
 from PIL import Image
@@ -545,17 +548,232 @@ def render_qr(matrix, scale=20, border=4, fg=(0, 0, 0), bg=(255, 255, 255)):
 #  QR Image Reader — image → binary matrix → codewords
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Canonical 7×7 finder pattern (1 = dark module).
+_FINDER_PATTERN = [
+    [1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 1],
+    [1, 0, 1, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 0, 1],
+    [1, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1],
+]
+
+
+def _rotate_matrix_cw(matrix, k):
+    """Rotate a square matrix 90° clockwise k times."""
+    m = matrix
+    for _ in range(k % 4):
+        n = len(m)
+        m = [[m[n - 1 - c][r] for c in range(n)] for r in range(n)]
+    return m
+
+
+def _finder_score(matrix, grid_size):
+    """Sum of module matches against the three expected finder patterns
+    (TL, TR, BL). Max score = 147."""
+    s = 0
+    for r in range(7):
+        for c in range(7):
+            fp = _FINDER_PATTERN[r][c]
+            if matrix[r][c] == fp:
+                s += 1
+            if matrix[r][grid_size - 7 + c] == fp:
+                s += 1
+            if matrix[grid_size - 7 + r][c] == fp:
+                s += 1
+    return s
+
+
+def _sample_matrix_vec(binary, side, grid_size):
+    """Sample a grid_size×grid_size module matrix from a warped binary image
+    using an integral-image box mean around each module center."""
+    import numpy as np
+    mod = side / grid_size
+    centers = ((np.arange(grid_size) + 0.5) * mod).astype(np.int64)
+    centers = np.clip(centers, 0, side - 1)
+    half = max(1, int(mod * 0.3))
+
+    # Integral image with a zero-padded top/left so box sums are O(1).
+    integral = np.pad(
+        np.cumsum(np.cumsum(binary.astype(np.int32), axis=0), axis=1),
+        ((1, 0), (1, 0)),
+        mode="constant",
+    )
+
+    rows = centers[:, None]
+    cols = centers[None, :]
+    y0 = np.clip(rows - half, 0, side)
+    y1 = np.clip(rows + half + 1, 0, side)
+    x0 = np.clip(cols - half, 0, side)
+    x1 = np.clip(cols + half + 1, 0, side)
+
+    box_sum = (
+        integral[y1, x1] - integral[y0, x1] - integral[y1, x0] + integral[y0, x0]
+    )
+    area = (y1 - y0) * (x1 - x0)
+    mean = box_sum / np.maximum(area, 1)
+    return (mean > 0.5).astype(int).tolist()
+
+
+def _read_qr_image_cv2(img):
+    """Robust image → matrix pipeline for phone photos.
+
+    Pipeline: cv2.QRCodeDetector locates the four QR corners → perspective
+    unwarp to a fixed canonical square → adaptive thresholding → brute-force
+    over (binarization × version × rotation), scoring each candidate matrix
+    by how well its corners match the canonical finder pattern.
+
+    Returns (matrix, version) or (None, None) if cv2 is unavailable or
+    detection fails.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None, None
+
+    if img.mode != "L":
+        gray = np.array(img.convert("L"))
+    else:
+        gray = np.array(img)
+    if gray.dtype != np.uint8:
+        gray = gray.astype(np.uint8)
+
+    # Try detection on a few preprocessed variants. Phone photos can be
+    # low-contrast, low-resolution, or have shadows; CLAHE + upscaling +
+    # sharpening noticeably improves cv2's detect() success rate.
+    candidates = []
+    h, w = gray.shape
+    if max(h, w) < 600:
+        scale = 600.0 / max(h, w)
+        candidates.append(
+            cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        )
+    candidates.append(gray)
+    try:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        candidates.append(clahe.apply(gray))
+    except Exception:
+        pass
+    # A sharpened variant rescues some blurry / dense (high-version) QRs
+    # where the classical detector silently gives up.
+    try:
+        sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+        candidates.append(cv2.filter2D(gray, -1, sharpen_kernel))
+    except Exception:
+        pass
+
+    # Prefer the newer Aruco-based detector when available — it's much more
+    # tolerant of rotation, blur, and dense QRs than the classical one.
+    detectors = []
+    if hasattr(cv2, "QRCodeDetectorAruco"):
+        try:
+            detectors.append(cv2.QRCodeDetectorAruco())
+        except Exception:
+            pass
+    detectors.append(cv2.QRCodeDetector())
+
+    points = None
+    used = None
+    for det in detectors:
+        for cand in candidates:
+            try:
+                ok, pts = det.detect(cand)
+            except cv2.error:
+                continue
+            if ok and pts is not None and len(pts) > 0:
+                points = pts
+                used = cand
+                break
+        if points is not None:
+            break
+    if points is None:
+        return None, None
+
+    pts = np.array(points).reshape(-1, 2).astype(np.float32)
+    if pts.shape[0] != 4:
+        return None, None
+
+    # Sort the four corners as TL, TR, BR, BL using the standard sum/diff trick.
+    # Even if the QR is rotated, this gives a consistent permutation; the
+    # subsequent 4-rotation search picks the right orientation.
+    s = pts.sum(axis=1)
+    d = pts[:, 0] - pts[:, 1]
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmax(d)]
+    bl = pts[np.argmin(d)]
+    src = np.array([tl, tr, br, bl], dtype=np.float32)
+
+    SIDE = 600
+    dst = np.array(
+        [[0, 0], [SIDE - 1, 0], [SIDE - 1, SIDE - 1], [0, SIDE - 1]],
+        dtype=np.float32,
+    )
+    H = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(
+        used, H, (SIDE, SIDE), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE
+    )
+
+    # Try several binarizations — phone photos sometimes need adaptive
+    # thresholding for shadows, sometimes Otsu for clean lighting.
+    #
+    # IMPORTANT: adaptive blockSize must cover several QR modules. If it's
+    # only ~1 module wide, the local mean equals the module brightness and
+    # the threshold degenerates into an edge detector. SIDE=600 with V3
+    # gives mod≈20px, so blockSize must be ≥ ~60. Try several sizes.
+    binarizations = []
+    _, otsu = cv2.threshold(
+        warped, 0, 1, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU
+    )
+    binarizations.append(otsu)
+    for block in (51, 81, 121):
+        binarizations.append(
+            cv2.adaptiveThreshold(
+                warped, 1, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV, block, 7,
+            )
+        )
+
+    best_matrix, best_v, best_score = None, None, -1
+    for binw in binarizations:
+        for v in range(1, 41):
+            grid_size = 17 + 4 * v
+            mod = SIDE / grid_size
+            if mod < 3:
+                # Need at least ~3 px per module for reliable sampling at SIDE=600.
+                continue
+            base = _sample_matrix_vec(binw, SIDE, grid_size)
+            for k in range(4):
+                rot = _rotate_matrix_cw(base, k) if k else base
+                sc = _finder_score(rot, grid_size)
+                if sc > best_score:
+                    best_score, best_matrix, best_v = sc, rot, v
+
+    # 147 max; require a strong finder match to avoid returning garbage.
+    if best_matrix is None or best_score < 120:
+        return None, None
+    return best_matrix, best_v
+
+
 def read_qr_image(img):
     """
     Read a QR code image and extract its binary module matrix.
     Returns (matrix, version) or (None, None) on failure.
-    
-    Works with axis-aligned QR images (no rotation).
-    Handles variable scale, borders, and quiet zones.
+
+    Tries the cv2-based pipeline first (handles rotation, perspective, and
+    uneven lighting — needed for phone photos). Falls back to a naive
+    axis-aligned reader if cv2 is unavailable or detection fails.
     """
     import numpy as np
 
-    # Convert to grayscale numpy array
+    # Primary: cv2 detect → warp → adaptive threshold → finder-scored sampling.
+    cv_matrix, cv_version = _read_qr_image_cv2(img)
+    if cv_matrix is not None:
+        return cv_matrix, cv_version
+
+    # Fallback: original naive reader (assumes clean, axis-aligned image).
     if img.mode != 'L':
         img = img.convert('L')
     arr = np.array(img)

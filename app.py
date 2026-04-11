@@ -345,22 +345,16 @@ with tab1:
                 bm_text = Q.qr_decode_text(bm_decoded, version=ver)
 
         # Wu list decode per block
-        wu_decoded = W.qr_wu_decode_full(corrupted_cw, ver, level)
-        if wu_decoded is not None and wu_decoded[:k] == data_bytes[:k]:
+        wu_cands = W.qr_wu_decode_full(corrupted_cw, ver, level)
+        if wu_cands:
             wu_ok = True
-            wu_text = Q.qr_decode_text(wu_decoded, version=ver)
-            rec_cw = W.qr_rs_encode_full(wu_decoded, ver, level)
-            qr_recovered = Q.make_qr_matrix(rec_cw, mask_idx=mask_used,
-                                            version=ver, ecc_level=level)
 
     if qr_recovered is None: qr_recovered = qr_corrupt
 
-    # Render — always pure black/white so phone scanners can read every image.
-    # State (clean/corrupted/recovered) is conveyed via captions and status
-    # boxes below each image, not by tinting the QR itself.
+    # Render — always pure black/white
     img_orig = Q.render_qr(qr_orig, scale=15)
     img_corrupt = Q.render_qr(qr_corrupt, scale=15)
-    img_rec = Q.render_qr(qr_recovered, scale=15)
+    # We will dynamically render img_rec inside column 3 below!
 
     # ── Capacity meter ──────────────────────────────────────────────
     st.divider()
@@ -416,11 +410,24 @@ with tab1:
     )
 
     # Three QR codes
+    # Three QR codes
     st.divider()
     st.caption("📱 **Tip:** every QR is rendered in pure black/white so you "
                "can point your phone camera at any of them and see how real "
                "scanners behave.")
+
+    # --- MOVE THE DROPDOWN HERE ---
+    display_idx = 0
+    if t_errors > 0 and wu_ok and len(wu_cands) > 1:
+        display_idx = st.selectbox(
+            f"🔀 {len(wu_cands)} candidates found! Select to view:", 
+            range(len(wu_cands)),
+            format_func=lambda i: f"Candidate {i+1}"
+        )
+        st.write("") # Adds a tiny bit of breathing room below the dropdown
+
     c1, c2, c3 = st.columns(3)
+
     with c1:
         st.markdown(f"#### 📡 Original ({size}×{size})")
         st.image(img_orig, use_container_width=True)
@@ -444,14 +451,31 @@ with tab1:
                      f" · beyond Wu bound{block_note}")
     with c3:
         st.markdown("#### 🔧 Recovered")
-        st.image(img_rec, use_container_width=True)
+        
         if t_errors == 0:
+            st.image(img_orig, use_container_width=True)
             st.success("Clean — identical to original.")
+            
         elif wu_ok:
-            st.success(f'🚀 Wu recovered · **"{wu_text}"**')
-            st.caption("Re-encoded from the recovered data bytes — "
-                       "byte-identical to the original matrix.")
+            # Extract the selected candidate using display_idx from above!
+            wu_decoded = wu_cands[display_idx]
+            wu_text = Q.qr_decode_text(wu_decoded, version=ver)
+            rec_cw = W.qr_rs_encode_full(wu_decoded, ver, level)
+            qr_recovered = Q.make_qr_matrix(rec_cw, mask_idx=mask_used, version=ver, ecc_level=level)
+            
+            # Image is now perfectly aligned with the others
+            st.image(Q.render_qr(qr_recovered, scale=15), use_container_width=True)
+            
+            # Status Box
+            if wu_decoded[:k] == data_bytes[:k]:
+                st.success(f'🚀 Exact Match · **"{wu_text}"**')
+                st.caption("Re-encoded from the recovered data bytes.")
+            else:
+                st.warning(f'⚠️ Alias Match · **"{wu_text}"**')
+                st.caption("Mathematically valid codeword, but different from original data.")
+                
         else:
+            st.image(img_corrupt, use_container_width=True)
             st.error("❌ Recovery failed — image shown is the corrupted one.")
 
     # Decoder comparison

@@ -13,6 +13,7 @@ Run:  python wu_list_decode_gf256.py
 """
 
 import random, math, numpy as np
+import itertools
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GF(2^8) Arithmetic  —  same field as QR codes
@@ -1096,20 +1097,18 @@ def qr_interleave_blocks(block_data, block_ecc, blocks):
 
 def qr_wu_decode_full(codeword, version, level, t_target=None):
     """
-    Multi-block Wu list decode: de-interleave, run Wu's decoder on each
-    block independently, return concatenated user data (or None on failure).
-
-    If `t_target` is None, each block tries progressively larger targets
-    (1, 2, ..., t_max) and returns the first successful candidate. This
-    matches how the standalone `decode_qr_image` path works.
+    Multi-block Wu list decode. Returns a list of all mathematically valid
+    concatenated user data combinations, or None on failure.
     """
     block_pairs = qr_de_interleave(codeword, version, level)
-    decoded_data = []
+    all_block_cands = []
+    
     for data_part, ecc_part in block_pairs:
         block_cw = list(data_part) + list(ecc_part)
         n = len(block_cw)
         k = len(data_part)
         ecc_w = len(ecc_part)
+        
         if t_target is not None:
             cands = qr_wu_decode(block_cw, k, ecc_w, t_target=t_target)
         else:
@@ -1123,10 +1122,20 @@ def qr_wu_decode_full(codeword, version, level, t_target=None):
                 cands = qr_wu_decode(block_cw, k, ecc_w, t_target=t_try)
                 if cands:
                     break
+                    
         if not cands:
             return None
-        decoded_data.extend(cands[0])
-    return decoded_data
+        all_block_cands.append(cands)
+        
+    # Generate every combination if multiple blocks have multiple candidates
+    full_cands = []
+    for combination in itertools.product(*all_block_cands):
+        full_data = []
+        for bd in combination:
+            full_data.extend(bd)
+        full_cands.append(full_data)
+        
+    return full_cands
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  QR Code RS Parameters (from paulmillr/qr)
