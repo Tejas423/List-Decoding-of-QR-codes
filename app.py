@@ -7,7 +7,7 @@ from PIL import Image
 import io
 
 st.set_page_config(
-    page_title="QR Error Correction Showdown",
+    page_title="List Decoding of QR codes",
     page_icon="📶",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -313,16 +313,16 @@ section[data-testid="stFileUploader"] {
 # ── Hero header ─────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero-header">
-    <div class="hero-title">QR Error Correction Showdown</div>
+    <div class="hero-title">List Decoding of QR codes</div>
     <div class="hero-sub">
-        <strong>Berlekamp–Massey</strong> vs <strong>Wu's Rational Curve-Fitting List Decoder</strong>
-        <br>Reed-Solomon over GF(2⁸) · QR Versions 1–40 · Single &amp; Multi-Block
+        <strong>Berlekamp–Massey</strong> vs <strong>Wu' List Decoder</strong>
+        <br>
     </div>
     <div class="hero-badges">
-        <span class="hero-badge">📡 Reed-Solomon</span>
-        <span class="hero-badge">🧮 GF(2⁸) Arithmetic</span>
-        <span class="hero-badge">📱 Phone Camera Decode</span>
         <span class="hero-badge">🔀 List Decoding</span>
+        <span class="hero-badge">🎯 Beyond Half-Distance</span>
+        <span class="hero-badge">📊 Multiple Candidates</span>
+        <span class="hero-badge">📶 QR Versions 1–40</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -621,8 +621,6 @@ with tab1:
 
     # ── Three QR codes ──────────────────────────────────────────────
     st.markdown('<div class="section-label">QR Codes</div>', unsafe_allow_html=True)
-    st.caption("📱 **Tip:** every QR is rendered in pure black/white — point your "
-               "phone camera at any of them to see how real scanners behave.")
 
     # Candidate selector (before columns so layout stays aligned)
     display_idx = 0
@@ -770,20 +768,9 @@ with tab2:
         import cv2 as _cv2
         _has_aruco = hasattr(_cv2, "QRCodeDetectorAruco")
         _det_name = "Aruco detector" if _has_aruco else "classical detector"
-        st.markdown(f"""<div style="display:inline-flex; align-items:center; gap:8px;
-            padding:6px 14px; border-radius:8px; font-size:0.82rem; font-weight:600;
-            background:rgba(5,150,105,0.1); border:1px solid rgba(52,211,153,0.2);
-            color:#6ee7b7;">
-            📷 Phone-photo pipeline: enabled · OpenCV {_cv2.__version__} · {_det_name}
-        </div>""", unsafe_allow_html=True)
+        
     except Exception:
-        st.markdown("""<div style="display:inline-flex; align-items:center; gap:8px;
-            padding:6px 14px; border-radius:8px; font-size:0.82rem; font-weight:600;
-            background:rgba(220,38,38,0.1); border:1px solid rgba(248,113,113,0.2);
-            color:#fca5a5;">
-            📷 Phone-photo pipeline: disabled — OpenCV not available.
-            Clean, axis-aligned images only.
-        </div>""", unsafe_allow_html=True)
+        pass
 
     st.write("")
     uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
@@ -875,7 +862,7 @@ with tab3:
     <div class="glass-card">
         <h3 style="margin-top:0;">🔀 Why "List" Decoding? Seeing Multiple Candidates</h3>
         <p style="color:#94a3b8; font-size:0.9rem; margin-bottom:0;">
-            In Tabs 1 &amp; 2, Wu always returns <strong>exactly 1 candidate</strong> —
+            In Tabs 1 &amp; 2, Wu always returns <strong>mostly 1 candidate</strong> —
             so where's the "list"?
         </p>
     </div>
@@ -883,7 +870,7 @@ with tab3:
 
     st.info(
         '**The list is a capability, not a guarantee.** For random errors, '
-        'the decoded list is almost always size 1 because it\'s astronomically '
+        'the decoded list is almost always size 1 because it\'s very '
         'unlikely for two codewords to both be close to the received word.\n\n'
         'To see a genuine multi-candidate list, we need a **crafted scenario** '
         'where the received word sits in the **overlap** of two decoding spheres.'
@@ -994,11 +981,9 @@ with tab3:
 # ── Footer ──────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-footer">
-    Wu's ISIT 2007 rational curve-fitting list decoder over GF(2⁸) ·
-    Encoding identical to paulmillr/qr · QR V1–V40 (single &amp; multi-block)
+    Wu's ISIT 2007 rational curve-fitting list decoder over GF(2⁸)
     <br>
     <span style="color:#4a5568;">Built with</span>
-    <span style="color:#818cf8;">Streamlit</span> ·
-    <span style="color:#4a5568;">Reed-Solomon arithmetic in pure Python</span>
+    <span style="color:#818cf8;">Streamlit</span>
 </div>
 """, unsafe_allow_html=True)
