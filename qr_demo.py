@@ -146,15 +146,19 @@ def all_configs(versions=None):
             d_b = worst_bound['d']
             t0_b = worst_bound['t0']
             t_max_b = worst_bound['t_max']
+            block_bounds = W.qr_block_bounds(ver, level)
+            total_bm = sum(b['t0'] for b in block_bounds)
+            total_wu = sum(b['t_max'] for b in block_bounds)
             configs.append({
                 'version': ver, 'level': level,
                 'n': n, 'k': k, 'ecc_w': ecc_w,
                 'size': size, 'max_chars': max_chars,
                 'd': d_b, 't0': t0_b, 't_max': t_max_b,
+                'total_bm': total_bm, 'total_wu': total_wu,
                 'blocks': blocks, 'nb': nb,
                 'block_n': n_b, 'block_k': first_bound['k'],
                 'block_n_max': max(g['n'] for g in bound_groups),
-                'block_bounds': W.qr_block_bounds(ver, level),
+                'block_bounds': block_bounds,
                 'bound_groups': bound_groups,
                 'wu_range_note': (
                     ", ".join(
