@@ -219,9 +219,23 @@ button[data-baseweb="tab"] {
     font-size: 0.92rem;
     padding: 10px 24px;
     border-radius: 10px 10px 0 0;
+    transition: color 0.3s ease, background 0.3s ease;
+    position: relative;
+}
+button[data-baseweb="tab"]:hover {
+    background: rgba(99,102,241,0.08);
 }
 div[data-baseweb="tab-highlight"] {
     background-color: #6366f1 !important;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+/* Smooth fade-in for tab panel content */
+div[data-baseweb="tab-panel"] {
+    animation: tabFadeIn 0.35s ease-out;
+}
+@keyframes tabFadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Decoder cards ── */
@@ -689,7 +703,7 @@ with tab1:
         st.markdown("""<div class="decoder-card bm">
             <h5 style="margin:0 0 4px 0;">📐 Berlekamp–Massey</h5>
             <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">
-                Classical unique decoder · used by phone scanners
+                Classical unique decoder
             </div>
         </div>""", unsafe_allow_html=True)
         if t_errors == 0:
@@ -704,7 +718,7 @@ with tab1:
         st.markdown("""<div class="decoder-card wu">
             <h5 style="margin:0 0 4px 0;">🚀 Wu's List Decoder</h5>
             <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">
-                Rational curve-fitting · ISIT 2007
+                Corrects beyond standard limit
             </div>
         </div>""", unsafe_allow_html=True)
         if t_errors == 0:
@@ -981,7 +995,6 @@ with tab3:
 # ── Footer ──────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-footer">
-    Wu's ISIT 2007 rational curve-fitting list decoder over GF(2⁸)
     <br>
     <span style="color:#4a5568;">Built with</span>
     <span style="color:#818cf8;">Streamlit</span>
