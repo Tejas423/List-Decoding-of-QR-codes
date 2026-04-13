@@ -15,6 +15,13 @@ Run:  python wu_list_decode_gf256.py
 import random, math, numpy as np
 import itertools
 
+# ── C++ backend (optional, ~25-50x faster for hot-path ops) ───────────────────
+try:
+    import wu_core as _cpp
+    _HAS_CPP = True
+except ImportError:
+    _HAS_CPP = False
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GF(2^8) Arithmetic  —  same field as QR codes
 #  Primitive polynomial: x^8 + x^4 + x^3 + x^2 + 1  (0x11D)
@@ -177,7 +184,7 @@ def rs_syndromes(n, k, received):
 #  Berlekamp-Massey over GF(2^8)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def berlekamp_massey(S):
+def _py_berlekamp_massey(S):
     """
     BM on syndromes S = [S_0, S_1, ..., S_{N-1}].
     Returns (Lambda, B) with L_Lambda + L_B = N.
@@ -208,11 +215,16 @@ def berlekamp_massey(S):
         C = [gf_mul(c, iv) for c in C]
     return ps(C), ps(B)
 
+def berlekamp_massey(S):
+    if _HAS_CPP:
+        return _cpp.berlekamp_massey(list(S))
+    return _py_berlekamp_massey(S)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Nullspace over GF(2^8) via Gaussian elimination
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def nullspace(A):
+def _py_nullspace(A):
     m = len(A)
     if m == 0: return []
     nc = len(A[0])
@@ -251,6 +263,11 @@ def nullspace(A):
         basis.append(v)
     return basis
 
+def nullspace(A):
+    if _HAS_CPP:
+        return _cpp.nullspace(A)
+    return _py_nullspace(A)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Interpolation system — (1, w)-weighted, multiplicity m
 #  Binomial coefficients mod 2 via Lucas' theorem
@@ -270,7 +287,7 @@ def monomial_list(Ly, LQ, w):
             mons.append((i, j))
     return mons
 
-def build_interp(xs, ys, is_inf, m, mons, Ly):
+def _py_build_interp(xs, ys, is_inf, m, mons, Ly):
     nm = len(mons); rows = []
     if nm == 0: return rows
     mi = max(i for i, _ in mons)
@@ -323,6 +340,12 @@ def build_interp(xs, ys, is_inf, m, mons, Ly):
                         row[mask] = px[mon_i[mask] - a]
                     rows.append(row.tolist())
     return rows
+
+def build_interp(xs, ys, is_inf, m, mons, Ly):
+    if _HAS_CPP:
+        return _cpp.build_interp(list(xs), list(ys), list(is_inf), m,
+                                  [(i, j) for i, j in mons], Ly)
+    return _py_build_interp(xs, ys, is_inf, m, mons, Ly)
 
 def vec_to_Q(vec, mons, Ly):
     mx = [0] * (Ly + 1)
@@ -413,7 +436,7 @@ def _Qy_eval_series(Q, s, m):
         s_pow = _pmul_mod(s_pow, s, m)  # s^j (for next iteration, s^{j-1+1} = s^j)
     return _ptrunc(result, m)
 
-def hensel_series(Q, K, max_roots=64):
+def _py_hensel_series(Q, K, max_roots=64):
     """
     Find power series roots of Q(x, y) to precision K using Hensel lifting.
     
@@ -503,7 +526,12 @@ def hensel_series(Q, K, max_roots=64):
             uniq.append(s)
     return uniq
 
-def rr_series(Q, K, max_br=256):
+def hensel_series(Q, K, max_roots=64):
+    if _HAS_CPP:
+        return _cpp.hensel_series(Q, K, max_roots)
+    return _py_hensel_series(Q, K, max_roots)
+
+def _py_rr_series(Q, K, max_br=256):
     Ly = len(Q) - 1; results = []; stack = [(Q, [], 0)]
     while stack and len(results) < max_br:
         Qc, pre, dep = stack.pop()
@@ -531,6 +559,11 @@ def rr_series(Q, K, max_br=256):
         key = tuple(s)
         if key not in seen: seen.add(key); uniq.append(s)
     return uniq
+
+def rr_series(Q, K, max_br=256):
+    if _HAS_CPP:
+        return _cpp.rr_series(Q, K, max_br)
+    return _py_rr_series(Q, K, max_br)
 
 def _Qshift(Q, c):
     """Q(x, c + x*y) / x^v"""
@@ -610,7 +643,7 @@ def wu_params(n, k, L_Lam, L_B, t=None):
 #  Chien search via register recurrence (replaces naive Horner evaluation)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def chien_search(poly, n):
+def _py_chien_search(poly, n):
     """Find positions i where poly(alpha^{-i}) = 0 using register recurrence."""
     deg = pdeg(poly)
     if deg <= 0:
@@ -632,6 +665,11 @@ def chien_search(poly, n):
         new_regs[nz] = EXP_NP[LOG_NP[regs[nz]] + mult_logs[nz]]
         regs = new_regs
     return err_pos
+
+def chien_search(poly, n):
+    if _HAS_CPP:
+        return _cpp.chien_search(list(poly), n)
+    return _py_chien_search(poly, n)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Recovery: series → (lambda, b) → Lambda* → decode
@@ -796,7 +834,7 @@ def gs_poly_fallback(n, k, received, t):
 #  Main decoder
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def wu_decode(n, k, received, t_target=None, verbose=False):
+def _py_wu_decode(n, k, received, t_target=None, verbose=False):
     nsym = n - k
     syns = rs_syndromes(n, k, received)
     if all(s == 0 for s in syns):
@@ -890,6 +928,12 @@ def wu_decode(n, k, received, t_target=None, verbose=False):
     if msg_u: all_cands.append(msg_u)
 
     return dedup(k, all_cands)
+
+def wu_decode(n, k, received, t_target=None, verbose=False):
+    if _HAS_CPP and not verbose:
+        t = -1 if t_target is None else t_target
+        return _cpp.wu_decode(n, k, list(received), t)
+    return _py_wu_decode(n, k, received, t_target, verbose)
 
 def _try_unique(n, k, Lambda, received, syns):
     L = pdeg(Lambda)
