@@ -5,6 +5,7 @@ import wu_qr as W
 import qr_demo as Q
 from PIL import Image
 import io
+import base64
 
 st.set_page_config(
     page_title="List Decoding of QR codes",
@@ -321,6 +322,176 @@ section[data-testid="stFileUploader"] {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 3px; }
+
+/* ── Ambiguous Channel: Decoding Spheres Diagram ── */
+.sphere-diagram {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1rem 0 0.5rem 0;
+    margin: 0.5rem 0 0.8rem 0;
+}
+.sphere-diagram svg text {
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+}
+@keyframes pulse-ring {
+    0%, 100% { r: 6; opacity: 0.35; }
+    50% { r: 14; opacity: 0.08; }
+}
+@keyframes dash-rotate {
+    to { stroke-dashoffset: -20; }
+}
+
+/* ── Ambiguous Channel: Step Flow ── */
+.step-flow {
+    display: flex;
+    gap: 0;
+    margin: 0.8rem 0 1rem 0;
+    overflow-x: auto;
+}
+.step-item {
+    flex: 1;
+    min-width: 120px;
+    text-align: center;
+    padding: 0.8rem 0.5rem;
+    position: relative;
+}
+.step-num {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+    font-weight: 700;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.4rem;
+    box-shadow: 0 2px 10px rgba(99,102,241,0.3);
+}
+.step-text {
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    line-height: 1.3;
+}
+.step-item:not(:last-child)::after {
+    content: '→';
+    position: absolute;
+    right: -6px;
+    top: 50%;
+    transform: translateY(-70%);
+    color: #6366f1;
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+/* ── Ambiguous Channel: Candidate Cards ── */
+.cand-card {
+    background: rgba(30, 32, 54, 0.7);
+    backdrop-filter: blur(10px);
+    border-radius: 14px;
+    padding: 1.2rem 1.4rem;
+    border: 1px solid rgba(99,102,241,0.15);
+    margin-bottom: 0.8rem;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.2s ease;
+}
+.cand-card:hover {
+    border-color: rgba(99,102,241,0.4);
+    box-shadow: 0 4px 20px rgba(99,102,241,0.1);
+    transform: translateY(-2px);
+}
+.cand-card.msg1 { border-left: 4px solid #34d399; }
+.cand-card.msg2 { border-left: 4px solid #60a5fa; }
+.cand-card.unknown { border-left: 4px solid #fbbf24; }
+.cand-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.3rem;
+}
+.cand-badge.msg1 { background: rgba(52,211,153,0.15); color: #34d399; }
+.cand-badge.msg2 { background: rgba(96,165,250,0.15); color: #60a5fa; }
+.cand-badge.unknown { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.cand-msg {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    margin: 0.3rem 0;
+}
+.cand-hex {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.72rem;
+    color: #64748b;
+    word-break: break-all;
+    margin-top: 0.3rem;
+}
+
+/* ── Ambiguous Channel: Byte Diff Visualization ── */
+.byte-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 0.5rem 0;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.7rem;
+}
+.byte-cell {
+    width: 36px; height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    font-weight: 600;
+    transition: transform 0.15s ease;
+}
+.byte-cell:hover { transform: scale(1.15); }
+.byte-c1 { background: rgba(52,211,153,0.15); color: #34d399; border: 1px solid rgba(52,211,153,0.25); }
+.byte-c2 { background: rgba(96,165,250,0.15); color: #60a5fa; border: 1px solid rgba(96,165,250,0.25); }
+.byte-same { background: rgba(100,116,139,0.1); color: #64748b; border: 1px solid rgba(100,116,139,0.15); }
+
+/* ── Ambiguous Channel: Geometry Stat Cards ── */
+.geo-card {
+    background: rgba(30, 32, 54, 0.6);
+    border-radius: 12px;
+    padding: 0.9rem 1rem;
+    text-align: center;
+    border: 1px solid rgba(99,102,241,0.12);
+    transition: border-color 0.3s ease;
+}
+.geo-card:hover { border-color: rgba(99,102,241,0.3); }
+.geo-val {
+    font-size: 1.6rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #818cf8, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.geo-label {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 0.2rem;
+    font-weight: 600;
+}
+
+/* ── Ambiguous Channel: Insight box ── */
+.insight-box {
+    background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.08));
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-top: 1rem;
+}
+.insight-box p {
+    color: #cbd5e1;
+    font-size: 0.88rem;
+    line-height: 1.6;
+    margin: 0;
+}
+.insight-box strong { color: #a5b4fc; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -630,7 +801,7 @@ with tab1:
             f"RS ≤{t0}, Wu ≤{t_max}. Total zones above are the sum across "
             f"all blocks (RS ≤{total_bm}, Wu ≤{total_wu}). "
             f"The actual boundary depends on how errors distribute across "
-            f"blocks — for random errors the distribution is roughly even."
+            f"blocks."
         )
 
     # ── Three QR codes ──────────────────────────────────────────────
@@ -874,40 +1045,172 @@ with tab2:
 with tab3:
     st.markdown("""
     <div class="glass-card">
-        <h3 style="margin-top:0;">🔀 Why "List" Decoding? Seeing Multiple Candidates</h3>
+        <h3 style="margin-top:0;">🔀 Why "List" Decoding?</h3>
         <p style="color:#94a3b8; font-size:0.9rem; margin-bottom:0;">
-            In Tabs 1 &amp; 2, Wu always returns <strong>mostly 1 candidate</strong> —
-            so where's the "list"?
+            In Tabs 1 &amp; 2, Wu almost always returns <strong>one candidate</strong>.
+            So where's the "list"?  This demo <strong>crafts</strong> a received word
+            that sits inside the overlap of two decoding spheres, forcing
+            Wu's decoder to return <strong>multiple valid codewords</strong>.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-    st.info(
-        '**The list is a capability, not a guarantee.** For random errors, '
-        'the decoded list is almost always size 1 because it\'s very '
-        'unlikely for two codewords to both be close to the received word.\n\n'
-        'To see a genuine multi-candidate list, we need a **crafted scenario** '
-        'where the received word sits in the **overlap** of two decoding spheres.'
-    )
+    # ── Interactive Decoding-Spheres SVG Diagram ──
+    # Streamlit sanitises inline SVG, so we embed via a base64 data-URI <img>.
+    _sphere_svg = '''\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" width="560" height="280">
+  <style>
+    text { font-family: Inter, Segoe UI, system-ui, sans-serif; }
+  </style>
+  <defs>
+    <radialGradient id="sG1" cx="40%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.22"/>
+      <stop offset="70%" stop-color="#34d399" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0.01"/>
+    </radialGradient>
+    <radialGradient id="sG2" cx="60%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.22"/>
+      <stop offset="70%" stop-color="#60a5fa" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#60a5fa" stop-opacity="0.01"/>
+    </radialGradient>
+    <radialGradient id="sGO" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.02"/>
+    </radialGradient>
+    <radialGradient id="rGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e9d5ff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <marker id="arr" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#94a3b8" opacity="0.7"/>
+    </marker>
+    <filter id="sGw" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="cl1"><circle cx="200" cy="135" r="109"/></clipPath>
+  </defs>
 
-    st.markdown('<div class="section-label">How It Works</div>', unsafe_allow_html=True)
+  <pattern id="gd" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+    <circle cx="10" cy="10" r="0.5" fill="rgba(148,163,184,0.12)"/>
+  </pattern>
+  <rect width="560" height="280" fill="url(#gd)" rx="12"/>
+
+  <circle cx="200" cy="135" r="110" fill="url(#sG1)" stroke="#34d399" stroke-width="1.2" stroke-dasharray="6,4" opacity="0.9" filter="url(#sGw)">
+    <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="4s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="360" cy="135" r="110" fill="url(#sG2)" stroke="#60a5fa" stroke-width="1.2" stroke-dasharray="6,4" opacity="0.9" filter="url(#sGw)">
+    <animate attributeName="stroke-dashoffset" from="0" to="20" dur="4s" repeatCount="indefinite"/>
+  </circle>
+
+  <g clip-path="url(#cl1)">
+    <circle cx="360" cy="135" r="109" fill="url(#sGO)" stroke="#a78bfa" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.7"/>
+  </g>
+
+  <circle cx="180" cy="135" r="8" fill="rgba(52,211,153,0.15)" stroke="#34d399" stroke-width="1.5"/>
+  <circle cx="180" cy="135" r="3.5" fill="#34d399"/>
+  <text x="180" y="118" text-anchor="middle" fill="#34d399" font-size="13" font-weight="800">C&#8321;</text>
+  <text x="180" y="158" text-anchor="middle" fill="#34d399" font-size="8.5" opacity="0.7">&quot;Message&quot;</text>
+
+  <circle cx="380" cy="135" r="8" fill="rgba(96,165,250,0.15)" stroke="#60a5fa" stroke-width="1.5"/>
+  <circle cx="380" cy="135" r="3.5" fill="#60a5fa"/>
+  <text x="380" y="118" text-anchor="middle" fill="#60a5fa" font-size="13" font-weight="800">C&#8322;</text>
+  <text x="380" y="158" text-anchor="middle" fill="#60a5fa" font-size="8.5" opacity="0.7">&quot;Nessage&quot;</text>
+
+  <circle cx="280" cy="135" r="6" fill="#a78bfa" opacity="0.35">
+    <animate attributeName="r" values="6;18;6" dur="2.5s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.35;0.04;0.35" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="280" cy="135" r="6" fill="#a78bfa" opacity="0.2">
+    <animate attributeName="r" values="6;14;6" dur="2.5s" begin="0.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.2;0.02;0.2" dur="2.5s" begin="0.6s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="280" cy="135" r="12" fill="url(#rGlow)"/>
+  <circle cx="280" cy="135" r="5.5" fill="#e9d5ff" stroke="#a78bfa" stroke-width="2"/>
+  <text x="280" y="118" text-anchor="middle" fill="#e9d5ff" font-size="14" font-weight="800">R</text>
+  <text x="280" y="157" text-anchor="middle" fill="#c4b5fd" font-size="7.5" font-weight="600">received word</text>
+
+  <line x1="192" y1="131" x2="268" y2="131" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr)" marker-start="url(#arr)" opacity="0.6"/>
+  <rect x="210" y="122" width="52" height="14" rx="3" fill="rgba(15,23,42,0.8)"/>
+  <text x="236" y="132.5" text-anchor="middle" fill="#cbd5e1" font-size="8" font-weight="600">d = 9</text>
+
+  <line x1="292" y1="131" x2="368" y2="131" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr)" marker-start="url(#arr)" opacity="0.6"/>
+  <rect x="310" y="122" width="52" height="14" rx="3" fill="rgba(15,23,42,0.8)"/>
+  <text x="336" y="132.5" text-anchor="middle" fill="#cbd5e1" font-size="8" font-weight="600">d = 9</text>
+
+  <line x1="180" y1="72" x2="180" y2="80" stroke="#64748b" stroke-width="0.8"/>
+  <line x1="380" y1="72" x2="380" y2="80" stroke="#64748b" stroke-width="0.8"/>
+  <line x1="180" y1="76" x2="380" y2="76" stroke="#64748b" stroke-width="0.8"/>
+  <rect x="245" y="66" width="70" height="15" rx="3" fill="rgba(15,23,42,0.85)"/>
+  <text x="280" y="76.5" text-anchor="middle" fill="#94a3b8" font-size="8.5" font-weight="600">d(C&#8321;,C&#8322;) = 18</text>
+
+  <text x="105" y="248" text-anchor="middle" fill="#34d399" font-size="8" opacity="0.65">Wu radius t = 11</text>
+  <text x="455" y="248" text-anchor="middle" fill="#60a5fa" font-size="8" opacity="0.65">Wu radius t = 11</text>
+
+  <text x="280" y="208" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="700" opacity="0.8">OVERLAP ZONE</text>
+  <text x="280" y="220" text-anchor="middle" fill="#94a3b8" font-size="7.5" opacity="0.6">Both codewords decodable from R</text>
+
+  <text x="18" y="22" fill="#64748b" font-size="8.5" font-weight="600">RS(26, 9) Hamming Space</text>
+  <rect x="445" y="10" width="100" height="18" rx="4" fill="rgba(99,102,241,0.1)" stroke="rgba(99,102,241,0.2)" stroke-width="0.5"/>
+  <text x="495" y="22" text-anchor="middle" fill="#818cf8" font-size="7.5" font-weight="600">d_min = 18 (MDS)</text>
+</svg>'''
+    _svg_b64 = base64.b64encode(_sphere_svg.encode()).decode()
     st.markdown(
-        "RS(26, 9) has minimum distance **d = 18** (MDS property: any single-byte "
-        "message change flips exactly 18 codeword bytes). If we pick two messages "
-        "that differ by just one character — like **\"Hi IIT!\"** vs **\"Hi IIS!\"** — "
-        "their codewords C₁ and C₂ are exactly 18 bytes apart.\n\n"
-        "We then construct a received word **R** by taking half the differing bytes "
-        "from C₁ and half from C₂. This puts R at distance 9 from both — "
-        "well within Wu's correction radius of 11."
+        f'<div class="sphere-diagram">'
+        f'<img src="data:image/svg+xml;base64,{_svg_b64}" '
+        f'style="width:100%;max-width:600px;" alt="Decoding spheres diagram"/>'
+        f'</div>',
+        unsafe_allow_html=True
     )
 
+    # ── Step-by-step flow ──
+    st.markdown('<div class="section-label">How It Works</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="step-flow">
+        <div class="step-item">
+            <div class="step-num">1</div>
+            <div class="step-text">Pick two messages that differ by <strong>1 character</strong></div>
+        </div>
+        <div class="step-item">
+            <div class="step-num">2</div>
+            <div class="step-text">RS-encode both to 26-byte codewords</div>
+        </div>
+        <div class="step-item">
+            <div class="step-num">3</div>
+            <div class="step-text">Build <strong>R</strong> by mixing bytes from both</div>
+        </div>
+        <div class="step-item">
+            <div class="step-num">4</div>
+            <div class="step-text">R is within distance 11 of <strong>both</strong></div>
+        </div>
+        <div class="step-item">
+            <div class="step-num">5</div>
+            <div class="step-text">Wu returns a <strong>genuine list</strong></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.expander("📐 Why distance 18?", expanded=False):
+        st.markdown(
+            "**RS(26, 9)** is a Maximum Distance Separable (MDS) code with minimum distance "
+            "**d = n − k + 1 = 26 − 9 + 1 = 18**. This means any single-byte message change "
+            "flips exactly 18 codeword bytes. If we pick two messages that differ by just one "
+            'character — like **"Message"** vs **"Nessage"** — '
+            "their codewords C₁ and C₂ are exactly 18 bytes apart.\n\n"
+            "We construct **R** by taking half the differing bytes from C₁ and half from C₂, "
+            "placing R at distance **9** from both — well within Wu's correction radius of **11**."
+        )
+
+    # ── Live Demo Inputs ──
     st.markdown('<div class="section-label">Live Demo</div>', unsafe_allow_html=True)
 
     ac1, ac2 = st.columns(2)
     with ac1:
-        msg1 = st.text_input("Message 1", value="Hi IIT!", max_chars=7, key="t3_m1")
+        msg1 = st.text_input("Message 1", value="Message", max_chars=7, key="t3_m1",
+                              help="Original message to encode")
     with ac2:
-        msg2 = st.text_input("Message 2 (change 1 char)", value="Hi IIS!", max_chars=7, key="t3_m2")
+        msg2 = st.text_input("Message 2 (change 1 char)", value="Nessage", max_chars=7, key="t3_m2",
+                              help="Slightly altered message — try changing just one letter")
 
     if st.button("🚀 Run Ambiguous Channel Demo", key="t3_run", use_container_width=True):
         # Encode both
@@ -921,7 +1224,7 @@ with tab3:
             st.error("Both messages encode to the same data bytes. Pick two different messages.")
         elif dist > 22:
             st.error(
-                f"Codeword distance = {dist}, but need ≤ 22 (= 2 × t_max) for overlap. "
+                f"Codeword distance = **{dist}**, but need ≤ 22 (= 2 × t_max) for overlap. "
                 f"Try messages that differ by fewer characters."
             )
         else:
@@ -932,22 +1235,65 @@ with tab3:
             dr1 = sum(1 for a, b in zip(rec, c1) if a != b)
             dr2 = sum(1 for a, b in zip(rec, c2) if a != b)
 
+            # ── Geometry: styled cards ──
             st.markdown('<div class="section-label">Geometry</div>', unsafe_allow_html=True)
             g1, g2, g3 = st.columns(3)
-            g1.metric("d(C₁, C₂)", f"{dist} bytes")
-            g2.metric("d(R, C₁)", f"{dr1} bytes")
-            g3.metric("d(R, C₂)", f"{dr2} bytes")
+            with g1:
+                st.markdown(f"""
+                <div class="geo-card">
+                    <div class="geo-val">{dist}</div>
+                    <div class="geo-label">d(C₁, C₂) bytes</div>
+                </div>""", unsafe_allow_html=True)
+            with g2:
+                st.markdown(f"""
+                <div class="geo-card">
+                    <div class="geo-val">{dr1}</div>
+                    <div class="geo-label">d(R, C₁) bytes</div>
+                </div>""", unsafe_allow_html=True)
+            with g3:
+                st.markdown(f"""
+                <div class="geo-card">
+                    <div class="geo-val">{dr2}</div>
+                    <div class="geo-label">d(R, C₂) bytes</div>
+                </div>""", unsafe_allow_html=True)
 
             if dr1 > 11 or dr2 > 11:
                 st.warning(
-                    f"One distance ({max(dr1,dr2)}) exceeds Wu bound of 11. "
+                    f"One distance ({max(dr1,dr2)}) exceeds Wu's bound of 11. "
                     f"The codewords are too far apart for full overlap."
                 )
 
-            # Run Wu decoder
+            # ── Byte-level diff visualization ──
+            st.markdown('<div class="section-label">Received Word — Byte Origins</div>',
+                        unsafe_allow_html=True)
+            byte_cells = []
+            from_c1 = set(range(26)) - set(diff[half:])
+            for i in range(26):
+                val = f"{rec[i]:02X}"
+                if i not in diff:
+                    cls = "byte-same"
+                    title = f"Byte {i}: same in both"
+                elif i in from_c1:
+                    cls = "byte-c1"
+                    title = f"Byte {i}: from C₁"
+                else:
+                    cls = "byte-c2"
+                    title = f"Byte {i}: from C₂"
+                byte_cells.append(f'<span class="byte-cell {cls}" title="{title}">{val}</span>')
+            st.markdown(
+                '<div class="byte-grid">' + ''.join(byte_cells) + '</div>'
+                '<div style="display:flex;gap:16px;margin-top:6px;font-size:0.72rem;">'
+                '<span style="color:#34d399;">■ From C₁</span>'
+                '<span style="color:#60a5fa;">■ From C₂</span>'
+                '<span style="color:#64748b;">■ Same in both</span>'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+            # ── Run Wu decoder ──
             cands = W.qr_wu_decode(rec, 9, 17, t_target=11)
 
-            st.markdown(f'<div class="section-label">Wu\'s Output: {len(cands)} Candidate(s)</div>',
+            st.markdown(f'<div class="section-label">Wu\'s Output — {len(cands)} Candidate(s)</div>',
                         unsafe_allow_html=True)
 
             if len(cands) >= 2:
@@ -957,40 +1303,53 @@ with tab3:
             else:
                 st.error("No candidates found.")
 
+            # ── Candidate cards with QR codes ──
             for idx, cand in enumerate(cands):
                 txt = Q.qr_decode_text(cand)
                 is1 = cand == d1; is2 = cand == d2
                 label = f'"{msg1}"' if is1 else (f'"{msg2}"' if is2 else "unknown")
+                css_class = "msg1" if is1 else ("msg2" if is2 else "unknown")
+                badge_text = "Message 1" if is1 else ("Message 2" if is2 else "Unknown")
+                fg_color = (0, 100, 0) if is1 else ((0, 0, 180) if is2 else (180, 140, 0))
+                bg_color = (230, 255, 230) if is1 else ((230, 230, 255) if is2 else (255, 245, 220))
 
                 # Build QR for this candidate
                 rec_ecc = W.qr_rs_encode(cand, 17)
                 rec_cw = cand + rec_ecc
                 _, msk = Q.get_best_qr_matrix(rec_cw, version=1, ecc_level='high')
                 qr_cand = Q.make_qr_matrix(rec_cw, mask_idx=msk, version=1, ecc_level='high')
-                img_cand = Q.render_qr(qr_cand, scale=15,
-                                        fg=(0,100,0) if is1 else (0,0,180),
-                                        bg=(230,255,230) if is1 else (230,230,255))
+                img_cand = Q.render_qr(qr_cand, scale=15, fg=fg_color, bg=bg_color)
 
                 cc1, cc2 = st.columns([1, 2])
                 with cc1:
                     st.image(img_cand, use_container_width=True)
                 with cc2:
-                    match_label = "Matches Message 1" if is1 else ("Matches Message 2" if is2 else "Unknown alias")
-                    st.markdown(f"**Candidate {idx+1}:** {label}")
-                    st.markdown(f"**{match_label}**")
-                    st.caption(f"Data: {W.fmt_hex(cand)}")
+                    st.markdown(f"""
+                    <div class="cand-card {css_class}">
+                        <span class="cand-badge {css_class}">{badge_text}</span>
+                        <div class="cand-msg">Candidate {idx + 1}: {label}</div>
+                        <div style="color:#94a3b8; font-size:0.85rem;">
+                            Decoded text: <strong style="color:#e2e8f0;">{txt}</strong>
+                        </div>
+                        <div class="cand-hex">Data: {W.fmt_hex(cand)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
+            # ── Takeaway section ──
             if len(cands) >= 2:
                 st.markdown('<div class="section-label">What This Means</div>', unsafe_allow_html=True)
-                st.markdown(
-                    "The received word R is equidistant from two valid QR codewords. "
-                    "A standard BM decoder would either fail or return only one — "
-                    "potentially the **wrong** one. Wu's list decoder returns **both**, "
-                    "and a higher-layer protocol (like a CRC check) would pick the correct one.\n\n"
-                    "In practice, random errors almost never create this situation, "
-                    "which is why the list is usually size 1. But the guarantee matters: "
-                    "Wu's algorithm **never misses** a valid codeword within its radius."
-                )
+                st.markdown(f"""
+                <div class="insight-box">
+                    <p>
+                        The received word <strong>R</strong> is equidistant from two valid QR codewords.
+                        A standard Berlekamp–Massey decoder would <strong>fail</strong> here.
+                    </p>
+                    <p style="margin-top:0.6rem;">
+                        Wu's list decoder returns <strong>both</strong>. In practice, random errors
+                        almost never create this situation — which is why the list is usually size 1.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
 
 # ── Footer ──────────────────────────────────────────────────────────
 st.markdown("""
