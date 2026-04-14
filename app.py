@@ -935,15 +935,14 @@ with tab1:
 with tab2:
     st.markdown("""
     <div class="glass-card">
-        <h3 style="margin-top:0;">📤 Upload a Corrupted QR Code</h3>
+        <h3 style="margin-top:0;">📤 Upload or Scan a QR Code</h3>
         <p style="color:#94a3b8; margin-bottom:8px; font-size:0.9rem;">
-            Upload a QR image (V1–V40, single or multi-block) and both decoders
-            will attempt recovery. Supports phone camera photos with perspective,
-            rotation, and lighting distortion.
+            Upload a QR image or scan one with your camera.
+            Both decoders will attempt recovery on the captured image.
+            Supports V1–V40, single or multi-block, with perspective and rotation correction.
         </p>
         <p style="color:#818cf8; font-size:0.85rem; margin-bottom:0;">
-            <strong>Test it:</strong> Generate &amp; Corrupt → set errors above scanner limit
-            → Download → Upload here
+            <strong>Test it:</strong> Generate &amp; Corrupt → Download → Upload or Scan here
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -953,19 +952,42 @@ with tab2:
         import cv2 as _cv2
         _has_aruco = hasattr(_cv2, "QRCodeDetectorAruco")
         _det_name = "Aruco detector" if _has_aruco else "classical detector"
-        
     except Exception:
         pass
 
     st.write("")
-    uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
+    input_mode = st.radio(
+        "Input method",
+        ["📁 Upload image", "📷 Camera scan"],
+        horizontal=True, key="t2_mode",
+        label_visibility="collapsed"
+    )
 
-    if uploaded is not None:
-        img_up = Image.open(uploaded)
+    img_up = None
+
+    if input_mode == "📁 Upload image":
+        uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
+        if uploaded is not None:
+            img_up = Image.open(uploaded)
+
+    else:  # Camera scan
+        st.markdown("""
+        <div style="background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.2);
+                    border-radius:10px; padding:0.7rem 1rem; margin-bottom:0.8rem;
+                    font-size:0.85rem; color:#cbd5e1;">
+            📷 Point your camera at a QR code and capture a snapshot.
+        </div>
+        """, unsafe_allow_html=True)
+        camera_photo = st.camera_input("Scan QR code", key="t2_cam")
+        if camera_photo is not None:
+            img_up = Image.open(camera_photo)
+
+    if img_up is not None:
 
         uc1, uc2, uc3 = st.columns(3)
         with uc1:
-            st.markdown("**📥 Uploaded**")
+            _lbl = "📷 Captured" if input_mode.startswith("📷") else "📥 Uploaded"
+            st.markdown(f"**{_lbl}**")
             st.image(img_up, use_container_width=True)
 
         with st.spinner("Reading QR → syndromes → BM → Wu..."):
@@ -1018,7 +1040,7 @@ with tab2:
             with r2:
                 st.markdown("""<div class="decoder-card wu">
                     <h5 style="margin:0 0 4px 0;">🚀 Wu's List Decoder</h5>
-                    <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Rational curve-fitting · ISIT 2007</div>
+                    <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Corrects beyond standard limit</div>
                 </div>""", unsafe_allow_html=True)
                 if nz_u == 0: st.success("Clean — no errors detected")
                 elif result['wu_success']:
@@ -1030,7 +1052,8 @@ with tab2:
                 st.markdown('<div class="section-label">Visual Comparison</div>', unsafe_allow_html=True)
                 rc1, rc2 = st.columns(2)
                 with rc1:
-                    st.markdown("**Corrupted**")
+                    _olbl = "Scanned" if input_mode.startswith("📷") else "Corrupted"
+                    st.markdown(f"**{_olbl}**")
                     st.image(img_up, use_container_width=True)
                 with rc2:
                     st.markdown("**Recovered**")
