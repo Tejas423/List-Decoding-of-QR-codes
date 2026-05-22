@@ -1079,18 +1079,18 @@ def decode_qr_image(img):
             bm_data_blocks.append(bm_decoded)
 
         # Wu list decode (progressive t)
-        wu_decoded = None
+        block_cands = []
         for t_try in range(1, block_bound['t_max'] + 1):
             cands = W.qr_wu_decode(block_cw, k_blk, ecc_blk, t_target=t_try)
             if cands:
-                wu_decoded = cands[0]
+                block_cands = cands
                 max_t_used = max(max_t_used, t_try)
                 break
-        if wu_decoded is None:
+        if not block_cands:
             wu_all_ok = False
-            wu_data_blocks.append(list(bd))
+            wu_data_blocks.append([list(bd)])
         else:
-            wu_data_blocks.append(wu_decoded)
+            wu_data_blocks.append(block_cands)
 
     if bm_all_ok:
         bm_user_data = []
@@ -1101,23 +1101,33 @@ def decode_qr_image(img):
         result['success'] = True
 
     if wu_all_ok:
-        wu_user_data = []
-        for bd in wu_data_blocks:
-            wu_user_data.extend(bd)
-        wu_txt = qr_decode_text(wu_user_data, version=version)
+        import itertools
+        wu_cands_list = []
+        for combination in itertools.product(*wu_data_blocks):
+            wu_user_data = []
+            for bd in combination:
+                wu_user_data.extend(bd)
+            wu_cands_list.append(wu_user_data)
+            
+        wu_txt_list = [qr_decode_text(cand, version=version) for cand in wu_cands_list]
+        
         result['wu_success'] = True
-        result['wu_text'] = wu_txt
+        result['wu_text'] = wu_txt_list[0]
+        result['wu_cands_text'] = wu_txt_list
+        result['wu_cands_data'] = wu_cands_list
         result['success'] = True
         result['t_used'] = max_t_used
 
-        # Re-encode the full message and count actual errors vs. received
-        rec_cw = W.qr_rs_encode_full(wu_user_data, version, ecc_level)
-        actual_errors = sum(1 for a, b in zip(rec_cw, codewords) if a != b)
-        result['actual_errors'] = actual_errors
-
-        # Build recovered matrix
-        rec_qr = make_qr_matrix(rec_cw, mask_idx=mask_idx, version=version, ecc_level=ecc_level)
-        result['recovered_matrix'] = rec_qr
+        # Re-encode all candidates and build recovered matrices
+        result['recovered_matrices'] = []
+        for cand_data in wu_cands_list:
+            rec_cw = W.qr_rs_encode_full(cand_data, version, ecc_level)
+            rec_qr = make_qr_matrix(rec_cw, mask_idx=mask_idx, version=version, ecc_level=ecc_level)
+            result['recovered_matrices'].append(rec_qr)
+        
+        # Keep actual_errors logic based on the first candidate for simplicity
+        rec_cw_0 = W.qr_rs_encode_full(wu_cands_list[0], version, ecc_level)
+        result['actual_errors'] = sum(1 for a, b in zip(rec_cw_0, codewords) if a != b)
 
     return result
 

@@ -956,37 +956,16 @@ with tab2:
         pass
 
     st.write("")
-    input_mode = st.radio(
-        "Input method",
-        ["📁 Upload image", "📷 Camera scan"],
-        horizontal=True, key="t2_mode",
-        label_visibility="collapsed"
-    )
-
     img_up = None
-
-    if input_mode == "📁 Upload image":
-        uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
-        if uploaded is not None:
-            img_up = Image.open(uploaded)
-
-    else:  # Camera scan
-        st.markdown("""
-        <div style="background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.2);
-                    border-radius:10px; padding:0.7rem 1rem; margin-bottom:0.8rem;
-                    font-size:0.85rem; color:#cbd5e1;">
-            📷 Point your camera at a QR code and capture a snapshot.
-        </div>
-        """, unsafe_allow_html=True)
-        camera_photo = st.camera_input("Scan QR code", key="t2_cam")
-        if camera_photo is not None:
-            img_up = Image.open(camera_photo)
+    uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
+    if uploaded is not None:
+        img_up = Image.open(uploaded)
 
     if img_up is not None:
 
         uc1, uc2, uc3 = st.columns(3)
         with uc1:
-            _lbl = "📷 Captured" if input_mode.startswith("📷") else "📥 Uploaded"
+            _lbl = "📥 Uploaded"
             st.markdown(f"**{_lbl}**")
             st.image(img_up, use_container_width=True)
 
@@ -1044,21 +1023,34 @@ with tab2:
                 </div>""", unsafe_allow_html=True)
                 if nz_u == 0: st.success("Clean — no errors detected")
                 elif result['wu_success']:
-                    st.success(f'🚀 Decoded: **"{result["wu_text"]}"**')
+                    wu_cands = result.get('wu_cands_text', [result['wu_text']])
+                    if len(wu_cands) > 1:
+                        st.success(f"🎉 **List decoding found {len(wu_cands)} candidates!**")
+                        for idx, txt in enumerate(wu_cands):
+                            st.info(f'**Candidate {idx + 1}:** "{txt}"')
+                    else:
+                        st.success(f'🚀 Decoded: **"{result["wu_text"]}"**')
                     if ae: st.caption(f"Corrected {ae} errors (t={result.get('t_used','-')})")
                 else: st.error("❌ Failed")
 
-            if result.get('recovered_matrix'):
+            if result.get('recovered_matrices') or result.get('recovered_matrix'):
                 st.markdown('<div class="section-label">Visual Comparison</div>', unsafe_allow_html=True)
-                rc1, rc2 = st.columns(2)
-                with rc1:
-                    _olbl = "Scanned" if input_mode.startswith("📷") else "Corrupted"
+                
+                matrices = result.get('recovered_matrices', [result.get('recovered_matrix')] if result.get('recovered_matrix') else [])
+                
+                num_cols = len(matrices) + 1
+                cols = st.columns(num_cols)
+                
+                with cols[0]:
+                    _olbl = "Uploaded"
                     st.markdown(f"**{_olbl}**")
                     st.image(img_up, use_container_width=True)
-                with rc2:
-                    st.markdown("**Recovered**")
-                    st.image(Q.render_qr(result['recovered_matrix'], scale=15,
-                             fg=(0,100,0), bg=(230,255,230)), use_container_width=True)
+                    
+                for i, matrix in enumerate(matrices):
+                    with cols[i + 1]:
+                        label = f"**Recovered Candidate {i+1}**" if len(matrices) > 1 else "**Recovered**"
+                        st.markdown(label)
+                        st.image(Q.render_qr(matrix, scale=15, fg=(0,100,0), bg=(230,255,230)), use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1327,6 +1319,28 @@ with tab3:
                 st.error("No candidates found.")
 
             # ── Candidate cards with QR codes ──
+            # First show the corrupted QR code
+            _, msk_rec = Q.get_best_qr_matrix(rec, version=1, ecc_level='high')
+            qr_rec = Q.make_qr_matrix(rec, mask_idx=msk_rec, version=1, ecc_level='high')
+            img_rec = Q.render_qr(qr_rec, scale=15, fg=(150, 40, 40), bg=(255, 240, 240))
+            
+            st.markdown('<div class="section-label">The Corrupted Received Word (R)</div>', unsafe_allow_html=True)
+            rc1, rc2 = st.columns([1, 2])
+            with rc1:
+                st.image(img_rec, use_container_width=True)
+            with rc2:
+                st.markdown(f"""
+                <div class="cand-card unknown" style="border-left-color: #ef4444;">
+                    <span class="cand-badge unknown" style="background: rgba(239, 68, 68, 0.15); color: #ef4444;">Corrupted QR</span>
+                    <div class="cand-msg" style="color:#ef4444;">This is the corrupted QR code sitting exactly between the candidates.</div>
+                    <div style="color:#94a3b8; font-size:0.85rem;">
+                        It does not decode to any single message using standard decoders.
+                    </div>
+                    <div class="cand-hex">Hex: {W.fmt_hex(rec[:9])}...</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown('<div class="section-label">List Decoding Candidates</div>', unsafe_allow_html=True)
             for idx, cand in enumerate(cands):
                 txt = Q.qr_decode_text(cand)
                 is1 = cand == d1; is2 = cand == d2
