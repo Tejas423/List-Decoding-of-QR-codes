@@ -649,15 +649,34 @@ def _read_qr_image_cv2(img):
 
     # Try detection on a few preprocessed variants. Phone photos can be
     # low-contrast, low-resolution, or have shadows; CLAHE + upscaling +
-    # sharpening noticeably improves cv2's detect() success rate.
+    # downscaling + sharpening noticeably improves cv2's detect() success rate.
     candidates = []
     h, w = gray.shape
+    
+    # Upscale tiny images
     if max(h, w) < 600:
         scale = 600.0 / max(h, w)
         candidates.append(
             cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         )
+    # Downscale massive phone camera images (12+ Megapixels break corner detectors)
+    elif max(h, w) > 1200:
+        scale = 1200.0 / max(h, w)
+        candidates.append(
+            cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        )
+        scale_small = 800.0 / max(h, w)
+        candidates.append(
+            cv2.resize(gray, None, fx=scale_small, fy=scale_small, interpolation=cv2.INTER_AREA)
+        )
+        
     candidates.append(gray)
+    
+    # Gaussian Blur rescues phone photos with heavy ISO grain in low light
+    try:
+        candidates.append(cv2.GaussianBlur(gray, (5, 5), 0))
+    except Exception:
+        pass
     try:
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         candidates.append(clahe.apply(gray))

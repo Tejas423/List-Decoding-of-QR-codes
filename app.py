@@ -500,7 +500,7 @@ st.markdown("""
 <div class="hero-header">
     <div class="hero-title">List Decoding of QR codes</div>
     <div class="hero-sub">
-        <strong>Berlekamp–Massey</strong> vs <strong>Wu' List Decoder</strong>
+        <strong>Unique Decoding</strong> vs <strong>Wu' List Decoder</strong>
         <br>
     </div>
     <div class="hero-badges">
@@ -648,6 +648,19 @@ with tab1:
         message = st.text_input(f"Message (max {max_ch} chars)",
                                 value="Tejas"[:max_ch] if max_ch >= 5 else "Hi"[:max_ch],
                                 max_chars=max_ch, key="t1_msg")
+                                
+    with st.expander("🎥 3D Camera & Warping"):
+        c_p, c_y, c_r, c_b, c_w = st.columns(5)
+        with c_p:
+            pitch = st.slider("X-Axis (Pitch)", min_value=-60, max_value=60, value=0, format="%d°", key="t1_pitch")
+        with c_y:
+            yaw = st.slider("Y-Axis (Yaw)", min_value=-60, max_value=60, value=0, format="%d°", key="t1_yaw")
+        with c_r:
+            roll = st.slider("Z-Axis (Roll)", min_value=-45, max_value=45, value=0, format="%d°", key="t1_roll")
+        with c_b:
+            bend = st.slider("Cylinder Bend", min_value=-200, max_value=200, value=0, format="%d%%", key="t1_bend")
+        with c_w:
+            wavy = st.slider("Wavy Bend", min_value=-200, max_value=200, value=0, format="%d%%", key="t1_wavy")
 
     # ── Error slider ────────────────────────────────────────────────
     st.markdown('<div class="section-label">Error Injection</div>', unsafe_allow_html=True)
@@ -766,6 +779,18 @@ with tab1:
     # Render images
     img_orig = Q.render_qr(qr_orig, scale=15)
     img_corrupt = Q.render_qr(qr_corrupt, scale=15)
+    
+    if bend != 0 or wavy != 0 or pitch != 0 or yaw != 0 or roll != 0:
+        import camera_transform as CT
+        if wavy != 0:
+            img_orig = CT.apply_wavy_bend(img_orig, wavy)
+            img_corrupt = CT.apply_wavy_bend(img_corrupt, wavy)
+        if bend != 0:
+            img_orig = CT.apply_bend(img_orig, bend)
+            img_corrupt = CT.apply_bend(img_corrupt, bend)
+        if pitch != 0 or yaw != 0 or roll != 0:
+            img_orig = CT.apply_3d_rotation(img_orig, pitch, yaw, roll)
+            img_corrupt = CT.apply_3d_rotation(img_corrupt, pitch, yaw, roll)
 
     # ── Capacity meter ──────────────────────────────────────────────
     st.markdown('<div class="section-label">Decoder Capacity</div>', unsafe_allow_html=True)
@@ -809,9 +834,10 @@ with tab1:
 
     # Candidate selector (before columns so layout stays aligned)
     display_idx = 0
-    if t_errors > 0 and wu_ok and len(wu_cands) > 1:
+    if wu_ok and wu_cands:
+        label_text = f"🔀 {len(wu_cands)} candidate{'s' if len(wu_cands) > 1 else ''} found — select to view:"
         display_idx = st.selectbox(
-            f"🔀 {len(wu_cands)} candidates found — select to view:",
+            label_text,
             range(len(wu_cands)),
             format_func=lambda i: f"Candidate {i+1}"
         )
@@ -872,7 +898,7 @@ with tab1:
     dc1, dc2 = st.columns(2)
     with dc1:
         st.markdown("""<div class="decoder-card bm">
-            <h5 style="margin:0 0 4px 0;">📐 Berlekamp–Massey</h5>
+            <h5 style="margin:0 0 4px 0;">📐 Unique Decoding</h5>
             <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">
                 Classical unique decoder
             </div>
@@ -1010,10 +1036,10 @@ with tab2:
             r1, r2 = st.columns(2)
             with r1:
                 st.markdown("""<div class="decoder-card bm">
-                    <h5 style="margin:0 0 4px 0;">📐 Berlekamp–Massey</h5>
+                    <h5 style="margin:0 0 4px 0;">📐 Unique Decoding</h5>
                     <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Classical unique decoder</div>
                 </div>""", unsafe_allow_html=True)
-                if nz_u == 0: st.success("Clean — no errors detected")
+                if nz_u == 0: st.success(f'✅ Decoded (Clean): **"{result.get("bm_text", "")}"**')
                 elif result['bm_success']: st.success(f'✅ Decoded: **"{result["bm_text"]}"**')
                 else: st.error("❌ Failed")
             with r2:
@@ -1021,7 +1047,8 @@ with tab2:
                     <h5 style="margin:0 0 4px 0;">🚀 Wu's List Decoder</h5>
                     <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Corrects beyond standard limit</div>
                 </div>""", unsafe_allow_html=True)
-                if nz_u == 0: st.success("Clean — no errors detected")
+                if nz_u == 0: 
+                    st.success(f'🚀 Decoded (Clean): **"{result.get("wu_text", result.get("bm_text", ""))}"**')
                 elif result['wu_success']:
                     wu_cands = result.get('wu_cands_text', [result['wu_text']])
                     if len(wu_cands) > 1:
@@ -1217,111 +1244,173 @@ with tab3:
         )
 
     # ── Live Demo Inputs ──
-    st.markdown('<div class="section-label">Live Demo</div>', unsafe_allow_html=True)
+    hd1, hd2 = st.columns([2, 1], vertical_alignment="bottom")
+    with hd1:
+        st.markdown('<div class="section-label" style="margin-bottom:0;">Live Demo</div>', unsafe_allow_html=True)
+    with hd2:
+        if st.button("🪄 Load 4-Candidate Story Demo", use_container_width=True, help="Automatically loads a simpler 2-block story that creates 4 sensible combinations!"):
+            st.session_state.t3_cfg = 11  # Version 3-H
+            st.session_state.t3_m1 = "The red car is very fast"
+            st.session_state.t3_m2 = "The bed car is very past"
+            st.session_state.t3_total_errs = 13
+            st.rerun()
+    
+    # Add config selector to Tab 3
+    def _label_t3(c):
+        bg = c.get('bound_groups', [])
+        if len(bg) > 1 and has_mixed_bounds(bg):
+            blk = " + ".join(f"{g['count']}×RS({g['n']},{g['k']})" for g in bg)
+        elif c['nb'] > 1:
+            blk = f"{c['nb']}× RS({c['block_n']},{c['block_k']})"
+        else:
+            blk = f"RS({c['block_n']},{c['block_k']})"
+        return (f"V{c['version']:02d}-{c['level'].upper()}  {blk}  "
+                f"RS≤{c['total_bm']}  Wu≤{c['total_wu']}  "
+                f"({c['size']}×{c['size']}, max {c['max_chars']} chars)")
+    
+    configs = Q.all_configs()
+    labels_t3 = [_label_t3(c) for c in configs]
+    sel_idx_t3 = st.selectbox("QR Configuration for Ambiguous Channel", range(len(configs)),
+                              format_func=lambda i: labels_t3[i], index=3, key="t3_cfg")
+    cfg = configs[sel_idx_t3]
+    ver, level = cfg['version'], cfg['level']
+    max_ch = cfg['max_chars']
 
     ac1, ac2 = st.columns(2)
     with ac1:
-        msg1 = st.text_input("Message 1", value="Message", max_chars=7, key="t3_m1",
+        msg1 = st.text_input("Message 1", value="Message"[:max_ch], max_chars=max_ch, key="t3_m1",
                               help="Original message to encode")
     with ac2:
-        msg2 = st.text_input("Message 2 (change 1 char)", value="Nessage", max_chars=7, key="t3_m2",
+        msg2 = st.text_input("Message 2 (change 1 char)", value="Nessage"[:max_ch], max_chars=max_ch, key="t3_m2",
                               help="Slightly altered message — try changing just one letter")
+                              
+    # Pre-calculate base distance per block to dynamically update the slider
+    total_data_words = sum(b[0] for b in W.qr_block_layout(ver, level))
+    d1_pre = Q.qr_encode_text(msg1, data_words=total_data_words, version=ver)
+    d2_pre = Q.qr_encode_text(msg2, data_words=total_data_words, version=ver)
+    c1_pre = W.qr_rs_encode_full(d1_pre, ver, level)
+    c2_pre = W.qr_rs_encode_full(d2_pre, ver, level)
+    
+    b1_pairs = W.qr_de_interleave(c1_pre, ver, level)
+    b2_pairs = W.qr_de_interleave(c2_pre, ver, level)
+    
+    max_base_errs = 0
+    valid_diff = True
+    for (d1b, e1b), (d2b, e2b) in zip(b1_pairs, b2_pairs):
+        cb1 = list(d1b) + list(e1b)
+        cb2 = list(d2b) + list(e2b)
+        diff_idx = [i for i in range(len(cb1)) if cb1[i] != cb2[i]]
+        if len(diff_idx) > 2 * cfg['t_max']: valid_diff = False
+        half = len(diff_idx) // 2
+        base = max(half, len(diff_idx) - half)
+        max_base_errs = max(max_base_errs, base)
+    
+    if "t3_total_errs" not in st.session_state:
+        st.session_state.t3_total_errs = int(max_base_errs)
+    st.session_state.t3_total_errs = max(int(max_base_errs), min(st.session_state.t3_total_errs, max(cfg['t_max'] + 2, int(max_base_errs))))
+
+    st.markdown(f'<div style="font-size:14px; font-weight:600; margin-bottom:-10px;">Total Errors injected per block (Wu\'s Max Radius is {cfg["t_max"]})</div>', unsafe_allow_html=True)
+    sc1, sc2, sc3 = st.columns([1, 10, 1])
+    with sc1:
+        st.write("") # Spacer
+        if st.button("➖", use_container_width=True, key="btn_minus"):
+            st.session_state.t3_total_errs = max(int(max_base_errs), st.session_state.t3_total_errs - 1)
+            st.rerun()
+    with sc2:
+        current_slider_val = st.slider(
+            "HiddenLabel", 
+            min_value=int(max_base_errs), max_value=max(cfg['t_max'] + 2, int(max_base_errs)), 
+            value=st.session_state.t3_total_errs,
+            label_visibility="collapsed",
+            help="Target total errors from the codewords. The app will inject random garbage bytes to push the distance up to this target."
+        )
+        if current_slider_val != st.session_state.t3_total_errs:
+            st.session_state.t3_total_errs = current_slider_val
+            st.rerun()
+    with sc3:
+        st.write("") # Spacer
+        if st.button("➕", use_container_width=True, key="btn_plus"):
+            st.session_state.t3_total_errs = min(max(cfg['t_max'] + 2, int(max_base_errs)), st.session_state.t3_total_errs + 1)
+            st.rerun()
+            
+    extra_errs = st.session_state.t3_total_errs - max_base_errs
 
     if st.button("🚀 Run Ambiguous Channel Demo", key="t3_run", use_container_width=True):
-        # Encode both
-        d1 = Q.qr_encode_text(msg1, data_words=9)
-        d2 = Q.qr_encode_text(msg2, data_words=9)
-        e1 = W.qr_rs_encode(d1, 17); c1 = d1 + e1
-        e2 = W.qr_rs_encode(d2, 17); c2 = d2 + e2
-        dist = sum(1 for a, b in zip(c1, c2) if a != b)
-
-        if d1 == d2:
+        if d1_pre == d2_pre:
             st.error("Both messages encode to the same data bytes. Pick two different messages.")
-        elif dist > 22:
-            st.error(
-                f"Codeword distance = **{dist}**, but need ≤ 22 (= 2 × t_max) for overlap. "
-                f"Try messages that differ by fewer characters."
-            )
+        elif not valid_diff:
+            st.error(f"Codeword distance in one or more blocks exceeds overlap capacity! Try messages that differ by fewer characters.")
         else:
-            diff = [i for i in range(26) if c1[i] != c2[i]]
-            half = len(diff) // 2
-            rec = c1[:]
-            for i in diff[half:]: rec[i] = c2[i]
-            dr1 = sum(1 for a, b in zip(rec, c1) if a != b)
-            dr2 = sum(1 for a, b in zip(rec, c2) if a != b)
+            rec_blocks = []
+            block_cands = []
+            
+            for (d1b, e1b), (d2b, e2b) in zip(b1_pairs, b2_pairs):
+                cb1 = list(d1b) + list(e1b)
+                cb2 = list(d2b) + list(e2b)
+                diff = [i for i in range(len(cb1)) if cb1[i] != cb2[i]]
+                half = len(diff) // 2
+                rec = cb1[:]
+                for i in diff[half:]: rec[i] = cb2[i]
+                
+                # Inject extra symmetrical errors into shared bytes
+                if extra_errs > 0:
+                    import random
+                    shared = [i for i in range(len(cb1)) if cb1[i] == cb2[i]]
+                    random.seed(42 + len(cb1)) 
+                    for idx in shared[:extra_errs]:
+                        rec[idx] = (cb1[idx] + random.randint(1, 255)) % 256
+                rec_blocks.append(rec)
+                
+                # Decode per block for visual breakdown
+                k_blk = len(d1b)
+                ecc_blk = len(e1b)
+                bcands = W.qr_wu_decode(rec, k_blk, ecc_blk, t_target=st.session_state.t3_total_errs)
+                block_cands.append(bcands)
+                
+            # Interleave rec_blocks
+            max_dk = max(len(d) for d, e in b1_pairs)
+            ecc_count = len(b1_pairs[0][1])
+            rec_full = []
+            
+            for i in range(max_dk):
+                for j, (d, e) in enumerate(b1_pairs):
+                    if i < len(d): rec_full.append(rec_blocks[j][i])
+                        
+            for i in range(ecc_count):
+                for j, (d, e) in enumerate(b1_pairs):
+                    rec_full.append(rec_blocks[j][len(d) + i])
+            
+            import itertools
+            full_cands = []
+            for combination in itertools.product(*block_cands):
+                full_data = []
+                for bd in combination:
+                    full_data.extend(bd)
+                full_cands.append(full_data)
 
-            # ── Geometry: styled cards ──
-            st.markdown('<div class="section-label">Geometry</div>', unsafe_allow_html=True)
-            g1, g2, g3 = st.columns(3)
-            with g1:
-                st.markdown(f"""
-                <div class="geo-card">
-                    <div class="geo-val">{dist}</div>
-                    <div class="geo-label">d(C₁, C₂) bytes</div>
-                </div>""", unsafe_allow_html=True)
-            with g2:
-                st.markdown(f"""
-                <div class="geo-card">
-                    <div class="geo-val">{dr1}</div>
-                    <div class="geo-label">d(R, C₁) bytes</div>
-                </div>""", unsafe_allow_html=True)
-            with g3:
-                st.markdown(f"""
-                <div class="geo-card">
-                    <div class="geo-val">{dr2}</div>
-                    <div class="geo-label">d(R, C₂) bytes</div>
-                </div>""", unsafe_allow_html=True)
-
-            if dr1 > 11 or dr2 > 11:
-                st.warning(
-                    f"One distance ({max(dr1,dr2)}) exceeds Wu's bound of 11. "
-                    f"The codewords are too far apart for full overlap."
-                )
-
-            # ── Byte-level diff visualization ──
-            st.markdown('<div class="section-label">Received Word — Byte Origins</div>',
-                        unsafe_allow_html=True)
-            byte_cells = []
-            from_c1 = set(range(26)) - set(diff[half:])
-            for i in range(26):
-                val = f"{rec[i]:02X}"
-                if i not in diff:
-                    cls = "byte-same"
-                    title = f"Byte {i}: same in both"
-                elif i in from_c1:
-                    cls = "byte-c1"
-                    title = f"Byte {i}: from C₁"
+            # UI Breakdown
+            st.markdown('<div class="section-label">Block-by-Block Decoder Output</div>', unsafe_allow_html=True)
+            for i, bcands in enumerate(block_cands):
+                num_cands = len(bcands) if bcands else 0
+                if num_cands >= 2:
+                    st.success(f"**Block {i+1}**: Found **{num_cands}** candidates! (Genuine List!)")
+                elif num_cands == 1:
+                    st.warning(f"**Block {i+1}**: Found 1 candidate.")
                 else:
-                    cls = "byte-c2"
-                    title = f"Byte {i}: from C₂"
-                byte_cells.append(f'<span class="byte-cell {cls}" title="{title}">{val}</span>')
-            st.markdown(
-                '<div class="byte-grid">' + ''.join(byte_cells) + '</div>'
-                '<div style="display:flex;gap:16px;margin-top:6px;font-size:0.72rem;">'
-                '<span style="color:#34d399;">■ From C₁</span>'
-                '<span style="color:#60a5fa;">■ From C₂</span>'
-                '<span style="color:#64748b;">■ Same in both</span>'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
-            # ── Run Wu decoder ──
-            cands = W.qr_wu_decode(rec, 9, 17, t_target=11)
-
-            st.markdown(f'<div class="section-label">Wu\'s Output — {len(cands)} Candidate(s)</div>',
-                        unsafe_allow_html=True)
-
-            if len(cands) >= 2:
-                st.success(f"🎉 **Genuine list of {len(cands)}!** This is why it's called *list* decoding.")
-            elif len(cands) == 1:
-                st.warning("Only 1 candidate found. The codewords may not overlap enough.")
+                    st.error(f"**Block {i+1}**: No candidates found.")
+                    
+            st.markdown('<div class="section-label">Final Combinatorial List (Cartesian Product)</div>', unsafe_allow_html=True)
+            total_size = len(full_cands) if block_cands and all(block_cands) else 0
+            if total_size >= 2:
+                st.success(f"🎉 **Total List Size: {total_size}!** The final list is the product of all blocks' candidate lists.")
+            elif total_size == 1:
+                st.warning("Only 1 candidate overall.")
             else:
-                st.error("No candidates found.")
+                st.error("Decoding failed.")
 
-            # ── Candidate cards with QR codes ──
-            # First show the corrupted QR code
-            _, msk_rec = Q.get_best_qr_matrix(rec, version=1, ecc_level='high')
-            qr_rec = Q.make_qr_matrix(rec, mask_idx=msk_rec, version=1, ecc_level='high')
+            # Render QR codes and Candidate cards for the final list
+            _, msk_rec = Q.get_best_qr_matrix(rec_full, version=ver, ecc_level=level)
+            qr_rec = Q.make_qr_matrix(rec_full, mask_idx=msk_rec, version=ver, ecc_level=level)
             img_rec = Q.render_qr(qr_rec, scale=15, fg=(150, 40, 40), bg=(255, 240, 240))
             
             st.markdown('<div class="section-label">The Corrupted Received Word (R)</div>', unsafe_allow_html=True)
@@ -1333,57 +1422,49 @@ with tab3:
                 <div class="cand-card unknown" style="border-left-color: #ef4444;">
                     <span class="cand-badge unknown" style="background: rgba(239, 68, 68, 0.15); color: #ef4444;">Corrupted QR</span>
                     <div class="cand-msg" style="color:#ef4444;">This is the corrupted QR code sitting exactly between the candidates.</div>
-                    <div style="color:#94a3b8; font-size:0.85rem;">
-                        It does not decode to any single message using standard decoders.
-                    </div>
-                    <div class="cand-hex">Hex: {W.fmt_hex(rec[:9])}...</div>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            st.markdown('<div class="section-label">List Decoding Candidates</div>', unsafe_allow_html=True)
-            for idx, cand in enumerate(cands):
-                txt = Q.qr_decode_text(cand)
-                is1 = cand == d1; is2 = cand == d2
-                label = f'"{msg1}"' if is1 else (f'"{msg2}"' if is2 else "unknown")
-                css_class = "msg1" if is1 else ("msg2" if is2 else "unknown")
-                badge_text = "Message 1" if is1 else ("Message 2" if is2 else "Unknown")
-                fg_color = (0, 100, 0) if is1 else ((0, 0, 180) if is2 else (180, 140, 0))
-                bg_color = (230, 255, 230) if is1 else ((230, 230, 255) if is2 else (255, 245, 220))
 
-                # Build QR for this candidate
-                rec_ecc = W.qr_rs_encode(cand, 17)
-                rec_cw = cand + rec_ecc
-                _, msk = Q.get_best_qr_matrix(rec_cw, version=1, ecc_level='high')
-                qr_cand = Q.make_qr_matrix(rec_cw, mask_idx=msk, version=1, ecc_level='high')
-                img_cand = Q.render_qr(qr_cand, scale=15, fg=fg_color, bg=bg_color)
+            if total_size > 0:
+                st.markdown('<div class="section-label">List Decoding Candidates</div>', unsafe_allow_html=True)
+                for idx, cand in enumerate(full_cands):
+                    txt = Q.qr_decode_text(cand, version=ver)
+                    is1 = cand == d1_pre; is2 = cand == d2_pre
+                    label = f'"{msg1}"' if is1 else (f'"{msg2}"' if is2 else "unknown")
+                    css_class = "msg1" if is1 else ("msg2" if is2 else "unknown")
+                    badge_text = "Message 1" if is1 else ("Message 2" if is2 else "Unknown")
+                    fg_color = (0, 100, 0) if is1 else ((0, 0, 180) if is2 else (180, 140, 0))
+                    bg_color = (230, 255, 230) if is1 else ((230, 230, 255) if is2 else (255, 245, 220))
 
-                cc1, cc2 = st.columns([1, 2])
-                with cc1:
-                    st.image(img_cand, use_container_width=True)
-                with cc2:
-                    st.markdown(f"""
-                    <div class="cand-card {css_class}">
-                        <span class="cand-badge {css_class}">{badge_text}</span>
-                        <div class="cand-msg">Candidate {idx + 1}: {label}</div>
-                        <div style="color:#94a3b8; font-size:0.85rem;">
-                            Decoded text: <strong style="color:#e2e8f0;">{txt}</strong>
+                    rec_cw = W.qr_rs_encode_full(cand, ver, level)
+                    _, msk = Q.get_best_qr_matrix(rec_cw, version=ver, ecc_level=level)
+                    qr_cand = Q.make_qr_matrix(rec_cw, mask_idx=msk, version=ver, ecc_level=level)
+                    img_cand = Q.render_qr(qr_cand, scale=15, fg=fg_color, bg=bg_color)
+
+                    cc1, cc2 = st.columns([1, 2])
+                    with cc1:
+                        st.image(img_cand, use_container_width=True)
+                    with cc2:
+                        st.markdown(f"""
+                        <div class="cand-card {css_class}">
+                            <span class="cand-badge {css_class}">{badge_text}</span>
+                            <div class="cand-msg" style="margin-top: 4px;">Candidate {idx + 1}: <strong style="color:#e2e8f0;">{txt}</strong></div>
                         </div>
-                        <div class="cand-hex">Data: {W.fmt_hex(cand)}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
 
             # ── Takeaway section ──
-            if len(cands) >= 2:
+            if total_size >= 2:
                 st.markdown('<div class="section-label">What This Means</div>', unsafe_allow_html=True)
                 st.markdown(f"""
                 <div class="insight-box">
                     <p>
-                        The received word <strong>R</strong> is equidistant from two valid QR codewords.
-                        A standard Berlekamp–Massey decoder would <strong>fail</strong> here.
+                        The received word <strong>R</strong> is equidistant from valid combinations of QR codewords.
+                        Because Wu's decoder returns lists for the individual blocks, assembling the full QR code requires taking the 
+                        <strong>Cartesian Product</strong> of all those lists!
                     </p>
                     <p style="margin-top:0.6rem;">
-                        Wu's list decoder returns <strong>both</strong>. In practice, random errors
-                        almost never create this situation — which is why the list is usually size 1.
+                        This leads to a combinatorial explosion — generating {total_size} mathematically valid 
+                        QR codes from a single corrupted image!
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
