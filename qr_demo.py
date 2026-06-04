@@ -981,27 +981,22 @@ def read_qr_format_info(matrix):
     return ecc_level, mask_idx
 
 
-def decode_qr_image(img):
+def decode_raw_matrix(matrix, version=None):
     """
-    Full pipeline: image → matrix → format info → codewords → BM/Wu decode.
-    Returns a dict with all results.
+    Decode pipeline starting directly from a binary matrix (0=white, 1=black).
+    Used by the JS hybrid scanner.
     """
+    if version is None:
+        version = max(1, min(40, round((len(matrix) - 17) / 4)))
+
     result = {
-        'success': False, 'matrix': None, 'version': None,
+        'success': False, 'matrix': matrix, 'version': version,
         'level': None, 'mask': None, 'codewords': None,
         'syndromes': None, 'n_errors': 0,
         'bm_success': False, 'wu_success': False,
         'bm_text': None, 'wu_text': None,
         'error': None,
     }
-
-    # Step 1: Read image to matrix
-    matrix, version = read_qr_image(img)
-    if matrix is None:
-        result['error'] = "Could not detect QR code in image"
-        return result
-    result['matrix'] = matrix
-    result['version'] = version
 
     # Step 2: Read format info
     ecc_level, mask_idx = read_qr_format_info(matrix)
@@ -1038,6 +1033,7 @@ def decode_qr_image(img):
         nz_total += sum(1 for x in s if x != 0)
     result['syndromes'] = all_syns
     result['n_errors'] = nz_total
+
 
     # Conservative display bound across all block groups. Mixed QR layouts
     # can have different Wu radii because group 2 carries one more data byte.
@@ -1147,8 +1143,26 @@ def decode_qr_image(img):
         # Keep actual_errors logic based on the first candidate for simplicity
         rec_cw_0 = W.qr_rs_encode_full(wu_cands_list[0], version, ecc_level)
         result['actual_errors'] = sum(1 for a, b in zip(rec_cw_0, codewords) if a != b)
-
     return result
+
+def decode_qr_image(img):
+    """
+    Full pipeline: image → matrix → format info → codewords → BM/Wu decode.
+    Returns a dict with all results.
+    """
+    # Step 1: Read image to matrix
+    matrix, version = read_qr_image(img)
+    if matrix is None:
+        return {
+            'success': False, 'matrix': None, 'version': None,
+            'level': None, 'mask': None, 'codewords': None,
+            'syndromes': None, 'n_errors': 0,
+            'bm_success': False, 'wu_success': False,
+            'bm_text': None, 'wu_text': None,
+            'error': "Could not detect QR code in image",
+        }
+
+    return decode_raw_matrix(matrix, version)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Standalone Demo

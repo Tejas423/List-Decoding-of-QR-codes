@@ -6,6 +6,8 @@ import qr_demo as Q
 from PIL import Image
 import io
 import base64
+import os
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="List Decoding of QR codes",
@@ -601,7 +603,7 @@ def has_mixed_bounds(bound_groups):
     return len(t_maxes) > 1 or len(t0s) > 1
 
 
-tab1, tab2, tab3 = st.tabs(["🎛️ Generate & Corrupt", "📤 Upload & Decode", "🔀 Ambiguous Channel"])
+tab1, tab2, tab_live, tab4 = st.tabs(["🎛️ Generate & Corrupt", "📤 Upload & Decode", "📷 Live Scanner", "🔀 Ambiguous Channel"])
 
 # ═══════════════════════════════════════════════════════════════════
 #  TAB 1: Generate & Corrupt
@@ -958,49 +960,210 @@ with tab1:
 #  TAB 2: Upload & Decode
 # ═══════════════════════════════════════════════════════════════════
 
+def render_decoding_results(img_up, matrix_up, version_up):
+        if img_up is not None or matrix_up is not None:
+            uc1, uc2, uc3 = st.columns(3)
+            with uc1:
+                if img_up is not None:
+                    _lbl = "📥 Uploaded"
+                    st.markdown(f"**{_lbl}**")
+                    st.image(img_up, use_container_width=True)
+                else:
+                    _lbl = "📷 Scanned (Raw Matrix)"
+                    st.markdown(f"**{_lbl}**")
+                    # Render the raw boolean matrix back to an image
+                    st.image(Q.render_qr(matrix_up, scale=4), use_container_width=True)
+
+            with st.spinner("Reading QR → syndromes → BM → Wu..."):
+                if img_up is not None:
+                    result = Q.decode_qr_image(img_up)
+                else:
+                    result = Q.decode_raw_matrix(matrix_up, version_up)
+
+                if img_up is None and matrix_up is not None:
+                    is_success = (result.get('bm_success') or result.get('wu_success')) and result.get('error') is None
+                    if is_success and not st.session_state.scanner_stop:
+                        st.session_state.scanner_stop = True
+                        st.rerun()
+
+            if result['error']:
+                st.error(f"❌ {result['error']}")
+            else:
+                cfg_u = Q.qr_config(result['version'], result['level'])
+                n_u, k_u, ecc_u, size_u, _ = cfg_u
+                t0_u = result.get('t0', ecc_u // 2)
+                t_max_u = result.get('t_max', t0_u)
+                nb_u = result.get('nb', 1)
+                bound_groups_u = result.get('bound_groups', [])
+                bounds_summary_u = format_bound_groups(bound_groups_u)
+                syns_u = result['syndromes']
+                nz_u = sum(1 for s in syns_u if s != 0) if syns_u else 0
+
+                with uc2:
+                    st.markdown("**🔍 Detected**")
+                    st.metric("Version", f"V{result['version']}-{result['level'].upper()}")
+                    code_str = (f"{bounds_summary_u}, mask {result['mask']}"
+                                if nb_u > 1 and bounds_summary_u
+                                else f"RS({n_u},{k_u}), mask {result['mask']}")
+                    st.metric("Code", code_str)
+                with uc3:
+                    st.markdown("**📊 Analysis**")
+                    tot_syn = ecc_u * nb_u
+                    st.metric("Non-zero Syndromes", f"{nz_u}/{tot_syn}")
+                    ae = result.get('actual_errors')
+                    if ae: st.metric("Errors Found", f"{ae}")
+                    block_bounds_u = W.qr_block_bounds(result['version'], result['level'])
+                    total_bm_u = sum(b['t0'] for b in block_bounds_u)
+                    total_wu_u = sum(b['t_max'] for b in block_bounds_u)
+                    st.metric("RS · Wu (total)", f"{total_bm_u} / {total_wu_u}")
+                    if nb_u > 1:
+                        st.caption(f"Per-block: RS ≤{t0_u}, Wu ≤{t_max_u}"
+                                   + (f" · {bounds_summary_u}" if bounds_summary_u else ""))
+
+                st.markdown('<div class="section-label">Decoder Results</div>', unsafe_allow_html=True)
+                r1, r2 = st.columns(2)
+                with r1:
+                    st.markdown("""<div class="decoder-card bm">
+                        <h5 style="margin:0 0 4px 0;">📐 Unique Decoding</h5>
+                        <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Classical unique decoder</div>
+                    </div>""", unsafe_allow_html=True)
+                    if nz_u == 0: st.success(f'✅ Decoded (Clean): **"{result.get("bm_text", "")}"**')
+                    elif result['bm_success']: st.success(f'✅ Decoded: **"{result["bm_text"]}"**')
+                    else: st.error("❌ Failed")
+                with r2:
+                    st.markdown("""<div class="decoder-card wu">
+                        <h5 style="margin:0 0 4px 0;">🚀 Wu's List Decoder</h5>
+                        <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Corrects beyond standard limit</div>
+                    </div>""", unsafe_allow_html=True)
+                    if nz_u == 0: 
+                        st.success(f'🚀 Decoded (Clean): **"{result.get("wu_text", result.get("bm_text", ""))}"**')
+                    elif result['wu_success']:
+                        wu_cands = result.get('wu_cands_text', [result['wu_text']])
+                        if len(wu_cands) > 1:
+                            st.success(f"🎉 **List decoding found {len(wu_cands)} candidates!**")
+                            for idx, txt in enumerate(wu_cands):
+                                st.info(f'**Candidate {idx + 1}:** "{txt}"')
+                        else:
+                            st.success(f'🚀 Decoded: **"{result["wu_text"]}"**')
+                        if ae: st.caption(f"Corrected {ae} errors (t={result.get('t_used','-')})")
+                    else: st.error("❌ Failed")
+
+                if result.get('recovered_matrices') or result.get('recovered_matrix'):
+                    st.markdown('<div class="section-label">Visual Comparison</div>', unsafe_allow_html=True)
+                
+                    matrices = result.get('recovered_matrices', [result.get('recovered_matrix')] if result.get('recovered_matrix') else [])
+                
+                    num_cols = len(matrices) + 1
+                    cols = st.columns(num_cols)
+                
+                    with cols[0]:
+                        if img_up is not None:
+                            _olbl = "Uploaded"
+                            st.markdown(f"**{_olbl}**")
+                            st.image(img_up, use_container_width=True)
+                        else:
+                            _olbl = "Scanned"
+                            st.markdown(f"**{_olbl}**")
+                            st.image(Q.render_qr(matrix_up, scale=4), use_container_width=True)
+                    
+                    for i, matrix in enumerate(matrices):
+                        with cols[i + 1]:
+                            label = f"**Recovered Candidate {i+1}**" if len(matrices) > 1 else "**Recovered**"
+                            st.markdown(label)
+                            st.image(Q.render_qr(matrix, scale=15, fg=(0,100,0), bg=(230,255,230)), use_container_width=True)
+
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  TAB 3: Ambiguous Channel
+    # ═══════════════════════════════════════════════════════════════════
+
+
 with tab2:
-    st.markdown("""
+    st.markdown('''
     <div class="glass-card">
-        <h3 style="margin-top:0;">📤 Upload or Scan a QR Code</h3>
+        <h3 style="margin-top:0;">\U0001f4e4 Upload & Decode</h3>
         <p style="color:#94a3b8; margin-bottom:8px; font-size:0.9rem;">
-            Upload a QR image or scan one with your camera.
-            Both decoders will attempt recovery on the captured image.
+            Upload a QR image from your computer to decode.
             Supports V1–V40, single or multi-block, with perspective and rotation correction.
         </p>
-        <p style="color:#818cf8; font-size:0.85rem; margin-bottom:0;">
-            <strong>Test it:</strong> Generate &amp; Corrupt → Download → Upload or Scan here
-        </p>
     </div>
-    """, unsafe_allow_html=True)
-
-    # cv2 pipeline status
-    try:
-        import cv2 as _cv2
-        _has_aruco = hasattr(_cv2, "QRCodeDetectorAruco")
-        _det_name = "Aruco detector" if _has_aruco else "classical detector"
-    except Exception:
-        pass
+    ''', unsafe_allow_html=True)
 
     st.write("")
-    img_up = None
+    if "scanner_stop" in st.session_state:
+        st.session_state.scanner_stop = False
+    
     uploaded = st.file_uploader("Upload QR image", type=['png','jpg','jpeg','bmp'], key="t2_up")
     if uploaded is not None:
         img_up = Image.open(uploaded)
+        render_decoding_results(img_up, None, None)
 
-    if img_up is not None:
+with tab_live:
+    st.markdown('''
+    <div class="glass-card">
+        <h3 style="margin-top:0;">\U0001f4f7 Live Camera Scanner</h3>
+        <p style="color:#94a3b8; margin-bottom:8px; font-size:0.9rem;">
+            Point your camera at a QR code to decode it in real time!
+            Automatically passes ambiguous codes to Wu's List Decoder in the background.
+        </p>
+    </div>
+    ''', unsafe_allow_html=True)
 
-        uc1, uc2, uc3 = st.columns(3)
-        with uc1:
-            _lbl = "📥 Uploaded"
-            st.markdown(f"**{_lbl}**")
-            st.image(img_up, use_container_width=True)
+    st.write("")
 
-        with st.spinner("Reading QR → syndromes → BM → Wu..."):
-            result = Q.decode_qr_image(img_up)
+    # Initialize session state for the live scanner
+    if "live_decoded" not in st.session_state:
+        st.session_state.live_decoded = False
+    if "live_result" not in st.session_state:
+        st.session_state.live_result = None
+    if "live_matrix" not in st.session_state:
+        st.session_state.live_matrix = None
+    if "live_version" not in st.session_state:
+        st.session_state.live_version = None
 
-        if result['error']:
-            st.error(f"❌ {result['error']}")
-        else:
+    # Show the scanner component only if we haven't decoded yet
+    if not st.session_state.live_decoded:
+        scanner_html = os.path.join(os.path.dirname(__file__), "scanner_component")
+        scanner = components.declare_component("hybrid_scanner", path=scanner_html)
+        val = scanner(key="scanner_comp", stop_camera=False)
+
+        if val:
+            matrix_up = val['matrix']
+            version_up = int(val['size'] - 17) // 4
+
+            # Try to decode the matrix
+            result = Q.decode_raw_matrix(matrix_up, version_up)
+
+            is_success = (result.get('bm_success') or result.get('wu_success')) and result.get('error') is None
+
+            if is_success:
+                # Save the result and stop the camera
+                st.session_state.live_decoded = True
+                st.session_state.live_result = result
+                st.session_state.live_matrix = matrix_up
+                st.session_state.live_version = version_up
+                st.rerun()
+    else:
+        # We have a decoded result — show the "Scan Another" button and results
+        st.success("✅ QR Code successfully decoded!")
+        if st.button("🔄 Scan Another QR Code"):
+            st.session_state.live_decoded = False
+            st.session_state.live_result = None
+            st.session_state.live_matrix = None
+            st.session_state.live_version = None
+            st.rerun()
+
+        result = st.session_state.live_result
+        matrix_up = st.session_state.live_matrix
+        version_up = st.session_state.live_version
+
+        if result and not result.get('error'):
+            # Show the scanned QR image
+            uc1, uc2, uc3 = st.columns(3)
+            with uc1:
+                st.markdown("**📷 Scanned (Raw Matrix)**")
+                st.image(Q.render_qr(matrix_up, scale=4), use_container_width=True)
+
             cfg_u = Q.qr_config(result['version'], result['level'])
             n_u, k_u, ecc_u, size_u, _ = cfg_u
             t0_u = result.get('t0', ecc_u // 2)
@@ -1047,7 +1210,7 @@ with tab2:
                     <h5 style="margin:0 0 4px 0;">🚀 Wu's List Decoder</h5>
                     <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:8px;">Corrects beyond standard limit</div>
                 </div>""", unsafe_allow_html=True)
-                if nz_u == 0: 
+                if nz_u == 0:
                     st.success(f'🚀 Decoded (Clean): **"{result.get("wu_text", result.get("bm_text", ""))}"**')
                 elif result['wu_success']:
                     wu_cands = result.get('wu_cands_text', [result['wu_text']])
@@ -1057,34 +1220,25 @@ with tab2:
                             st.info(f'**Candidate {idx + 1}:** "{txt}"')
                     else:
                         st.success(f'🚀 Decoded: **"{result["wu_text"]}"**')
+                    ae = result.get('actual_errors')
                     if ae: st.caption(f"Corrected {ae} errors (t={result.get('t_used','-')})")
                 else: st.error("❌ Failed")
 
             if result.get('recovered_matrices') or result.get('recovered_matrix'):
                 st.markdown('<div class="section-label">Visual Comparison</div>', unsafe_allow_html=True)
-                
                 matrices = result.get('recovered_matrices', [result.get('recovered_matrix')] if result.get('recovered_matrix') else [])
-                
                 num_cols = len(matrices) + 1
                 cols = st.columns(num_cols)
-                
                 with cols[0]:
-                    _olbl = "Uploaded"
-                    st.markdown(f"**{_olbl}**")
-                    st.image(img_up, use_container_width=True)
-                    
+                    st.markdown("**Scanned**")
+                    st.image(Q.render_qr(matrix_up, scale=4), use_container_width=True)
                 for i, matrix in enumerate(matrices):
                     with cols[i + 1]:
                         label = f"**Recovered Candidate {i+1}**" if len(matrices) > 1 else "**Recovered**"
                         st.markdown(label)
                         st.image(Q.render_qr(matrix, scale=15, fg=(0,100,0), bg=(230,255,230)), use_container_width=True)
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  TAB 3: Ambiguous Channel
-# ═══════════════════════════════════════════════════════════════════
-
-with tab3:
+with tab4:
     st.markdown("""
     <div class="glass-card">
         <h3 style="margin-top:0;">🔀 Why "List" Decoding?</h3>

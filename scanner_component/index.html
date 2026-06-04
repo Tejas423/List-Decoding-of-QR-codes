@@ -1,422 +1,308 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: Inter, 'Segoe UI', system-ui, sans-serif;
-    background: transparent;
-    color: #e2e8f0;
-    overflow: hidden;
-  }
+    <meta charset="UTF-8">
+    <title>Hybrid QR Scanner</title>
+    <!-- Include Streamlit component API -->
+    <script>
+        function sendToStreamlit(type, data) {
+            const outData = Object.assign({
+                isStreamlitMessage: true,
+                type: type,
+            }, data);
+            window.parent.postMessage(outData, "*");
+        }
 
-  .scanner-wrap {
-    position: relative;
-    width: 100%;
-    max-width: 480px;
-    margin: 0 auto;
-    border-radius: 16px;
-    overflow: hidden;
-    background: #0f1221;
-    border: 1px solid rgba(99,102,241,0.2);
-  }
-
-  #video {
-    width: 100%;
-    display: block;
-    border-radius: 16px;
-    object-fit: cover;
-    min-height: 300px;
-    background: #0f1221;
-  }
-
-  .overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 2;
-  }
-
-  .corner-mask {
-    position: absolute;
-    inset: 0;
-  }
-  .corner-mask::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.45);
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'%3E%3Crect width='400' height='400' fill='white'/%3E%3Crect x='75' y='75' width='250' height='250' rx='16' fill='black'/%3E%3C/svg%3E");
-    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'%3E%3Crect width='400' height='400' fill='white'/%3E%3Crect x='75' y='75' width='250' height='250' rx='16' fill='black'/%3E%3C/svg%3E");
-    mask-size: cover;
-    -webkit-mask-size: cover;
-  }
-
-  .vf-corner {
-    position: absolute;
-    width: 28px; height: 28px;
-    border-color: #818cf8;
-    border-style: solid;
-    border-width: 0;
-    z-index: 3;
-    transition: border-color 0.3s ease;
-  }
-  .vf-corner.tl { top: 18.5%; left: 18.5%; border-top-width: 3px; border-left-width: 3px; border-top-left-radius: 8px; }
-  .vf-corner.tr { top: 18.5%; right: 18.5%; border-top-width: 3px; border-right-width: 3px; border-top-right-radius: 8px; }
-  .vf-corner.bl { bottom: 18.5%; left: 18.5%; border-bottom-width: 3px; border-left-width: 3px; border-bottom-left-radius: 8px; }
-  .vf-corner.br { bottom: 18.5%; right: 18.5%; border-bottom-width: 3px; border-right-width: 3px; border-bottom-right-radius: 8px; }
-
-  .scan-line {
-    position: absolute;
-    left: 19%; right: 19%;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, #818cf8, #a78bfa, #818cf8, transparent);
-    z-index: 3;
-    opacity: 0.8;
-    animation: scan 2.2s ease-in-out infinite;
-    box-shadow: 0 0 12px rgba(129,140,248,0.5);
-  }
-  @keyframes scan {
-    0%, 100% { top: 19%; }
-    50% { top: 78%; }
-  }
-
-  .scanner-wrap.detected .vf-corner { border-color: #34d399; }
-  .scanner-wrap.detected .scan-line { animation: none; opacity: 0; }
-  .scanner-wrap.detected::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border: 3px solid #34d399;
-    border-radius: 16px;
-    z-index: 5;
-    animation: flash-border 0.6s ease-out;
-    pointer-events: none;
-  }
-  @keyframes flash-border {
-    0% { box-shadow: inset 0 0 30px rgba(52,211,153,0.4); }
-    100% { box-shadow: inset 0 0 0 transparent; }
-  }
-
-  .status-bar {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 10px 16px;
-    background: linear-gradient(transparent, rgba(0,0,0,0.7));
-    z-index: 4;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    border-bottom-left-radius: 16px;
-    border-bottom-right-radius: 16px;
-  }
-  .status-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: #818cf8;
-    animation: blink 1.5s ease-in-out infinite;
-  }
-  @keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-  .status-dot.detected { background: #34d399; animation: none; }
-  .status-text { color: #94a3b8; }
-  .status-text.detected { color: #34d399; font-weight: 600; }
-
-  .msg-box {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 300px;
-    text-align: center;
-    padding: 2rem;
-    gap: 12px;
-    color: #94a3b8;
-    font-size: 0.9rem;
-  }
-  .msg-box .icon { font-size: 2.5rem; }
-  .msg-box .title { color: #e2e8f0; font-weight: 700; font-size: 1rem; }
-  .retry-btn {
-    margin-top: 8px;
-    padding: 8px 20px;
-    border: 1px solid rgba(99,102,241,0.3);
-    background: rgba(99,102,241,0.1);
-    color: #818cf8;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 0.85rem;
-    font-weight: 600;
-    transition: background 0.2s;
-  }
-  .retry-btn:hover { background: rgba(99,102,241,0.2); }
-
-  /* Manual capture fallback button */
-  .capture-btn {
-    position: absolute;
-    bottom: 46px; right: 14px;
-    z-index: 6;
-    padding: 6px 14px;
-    background: rgba(99,102,241,0.85);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    backdrop-filter: blur(6px);
-    transition: background 0.2s;
-  }
-  .capture-btn:hover { background: rgba(99,102,241,1); }
-</style>
+        const Streamlit = {
+            setComponentReady: function() {
+                sendToStreamlit("streamlit:componentReady", {apiVersion: 1});
+            },
+            setFrameHeight: function(height) {
+                sendToStreamlit("streamlit:setFrameHeight", {height: height});
+            },
+            setComponentValue: function(value) {
+                sendToStreamlit("streamlit:setComponentValue", {value: value});
+            },
+            RENDER_EVENT: "streamlit:render",
+            events: {
+                addEventListener: function(type, callback) {
+                    window.addEventListener("message", function(event) {
+                        if (event.data.type === type) {
+                            event.detail = event.data;
+                            callback(event);
+                        }
+                    });
+                }
+            }
+        };
+    </script>
+    <!-- Include Paul Miller fast-qr -->
+    <script src="qr.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            background: transparent;
+            color: white;
+            text-align: center;
+        }
+        #container {
+            position: relative;
+            display: inline-block;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 500px;
+            min-height: 400px;
+            background: #111;
+        }
+        video {
+            display: block;
+            width: 100%;
+            height: 100%;
+            min-height: 400px;
+            object-fit: cover;
+            background: #111;
+        }
+        #controls {
+            padding: 15px;
+            background: #222;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        button {
+            background-color: #6366f1;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover { background-color: #4f46e5; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        
+        #overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            width: 100%;
+            height: 100%;
+        }
+        #status {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #818cf8;
+            min-height: 20px;
+        }
+    </style>
 </head>
 <body>
+    <div id="controls">
+        <button id="btn-start">Start Camera</button>
+        <button id="btn-stop" disabled>Stop Camera</button>
+        <div id="status">Waiting for camera...</div>
+    </div>
+    
+    <div id="container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="overlay-canvas"></canvas>
+    </div>
 
-<div class="scanner-wrap" id="scannerWrap">
-  <video id="video" autoplay playsinline muted></video>
-  <div class="overlay">
-    <div class="corner-mask"></div>
-    <div class="vf-corner tl"></div>
-    <div class="vf-corner tr"></div>
-    <div class="vf-corner bl"></div>
-    <div class="vf-corner br"></div>
-    <div class="scan-line"></div>
-  </div>
-  <button class="capture-btn" id="captureBtn" title="Manual capture">Capture</button>
-  <div class="status-bar">
-    <div class="status-dot" id="statusDot"></div>
-    <span class="status-text" id="statusText">Starting camera...</span>
-  </div>
-</div>
+    <!-- Hidden canvas for capturing video frames -->
+    <canvas id="hidden-canvas" style="display:none;"></canvas>
 
-<div class="msg-box" id="msgBox" style="display:none;"></div>
-<canvas id="captureCanvas" style="display:none;"></canvas>
-
-<!-- jsQR as fallback for browsers without BarcodeDetector -->
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
-<script>
-(function() {
-  // ── Streamlit Component Communication ──────────────────────────
-  function sendMsg(type, data) {
-    window.parent.postMessage(
-      { isStreamlitMessage: true, type: type, ...data }, "*"
-    );
-  }
-  function setComponentValue(val) { sendMsg("streamlit:setComponentValue", { value: val }); }
-  function setFrameHeight(h)      { sendMsg("streamlit:setFrameHeight", { height: h }); }
-  sendMsg("streamlit:componentReady", { apiVersion: 1 });
-
-  // ── DOM refs ───────────────────────────────────────────────────
-  var video      = document.getElementById('video');
-  var canvas     = document.getElementById('captureCanvas');
-  var ctx        = canvas.getContext('2d', { willReadFrequently: true });
-  var wrap       = document.getElementById('scannerWrap');
-  var msgBox     = document.getElementById('msgBox');
-  var statusDot  = document.getElementById('statusDot');
-  var statusText = document.getElementById('statusText');
-  var captureBtn = document.getElementById('captureBtn');
-
-  var stream   = null;
-  var timer    = null;
-  var cooldown = false;
-  var COOLDOWN_MS = 3500;
-
-  // ── Detect which scanner engine to use ─────────────────────────
-  var hasBarcodeDetector = ('BarcodeDetector' in window);
-  var barcodeDetector = null;
-  if (hasBarcodeDetector) {
-    try {
-      barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
-    } catch(e) {
-      hasBarcodeDetector = false;
-    }
-  }
-
-  // ── Error / permission UI ─────────────────────────────────────
-  function showMsg(icon, title, msg, retry) {
-    wrap.style.display = 'none';
-    msgBox.style.display = 'flex';
-    msgBox.innerHTML =
-      '<div class="icon">' + icon + '</div>' +
-      '<div class="title">' + title + '</div>' +
-      '<div>' + msg + '</div>' +
-      (retry ? '<button class="retry-btn" onclick="location.reload()">Try Again</button>' : '');
-    setFrameHeight(340);
-  }
-
-  // ── Capture full frame as base64 JPEG ─────────────────────────
-  function captureFrameB64() {
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-    return canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
-  }
-
-  // ── QR detected — flash green + send to Streamlit ─────────────
-  function onDetected() {
-    if (cooldown) return;
-    cooldown = true;
-
-    wrap.classList.add('detected');
-    statusDot.classList.add('detected');
-    statusText.classList.add('detected');
-    statusText.textContent = 'QR Detected!';
-
-    var b64 = captureFrameB64();
-    setComponentValue(b64);
-
-    setTimeout(function() {
-      cooldown = false;
-      wrap.classList.remove('detected');
-      statusDot.classList.remove('detected');
-      statusText.classList.remove('detected');
-      statusText.textContent = 'Scanning...';
-    }, COOLDOWN_MS);
-  }
-
-  // ── Manual capture button (always works) ──────────────────────
-  captureBtn.addEventListener('click', function() {
-    if (video.readyState >= 2) {
-      cooldown = false;  // override cooldown for manual capture
-      onDetected();
-    }
-  });
-
-  // ════════════════════════════════════════════════════════════════
-  //  SCANNER ENGINE: BarcodeDetector (native) or jsQR (fallback)
-  // ════════════════════════════════════════════════════════════════
-
-  // -- BarcodeDetector: scans the video element directly ----------
-  function scanWithBarcodeDetector() {
-    if (cooldown || video.readyState < 2) return;
-    barcodeDetector.detect(video)
-      .then(function(barcodes) {
-        if (barcodes && barcodes.length > 0) {
-          onDetected();
+    <script>
+        // Streamlit Component Initialization
+        function sendHeight() {
+            const h = Math.max(document.body.scrollHeight, 600);
+            Streamlit.setFrameHeight(h);
         }
-      })
-      .catch(function() {
-        // detect() can fail if video frame isn't ready — just skip
-      });
-  }
 
-  // -- jsQR: scans pixel data from canvas -------------------------
-  function scanWithJsQR() {
-    if (cooldown || video.readyState < 2) return;
-    var vw = video.videoWidth;
-    var vh = video.videoHeight;
-    if (vw === 0 || vh === 0) return;
+        function onRender(event) {
+            sendHeight();
+            
+            // If python sends down stop_camera=True, we stop it!
+            const args = event.detail.args;
+            if (args && args.stop_camera === true) {
+                if (isScanning) {
+                    stopCamera();
+                    statusTxt.innerText = "Successfully Decoded by Python!";
+                }
+            }
+        }
+        Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+        window.addEventListener('load', sendHeight);
+        
+        const video = document.getElementById('video');
+        const hiddenCanvas = document.getElementById('hidden-canvas');
+        const overlayCanvas = document.getElementById('overlay-canvas');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        const statusTxt = document.getElementById('status');
 
-    canvas.width  = vw;
-    canvas.height = vh;
-    ctx.drawImage(video, 0, 0);
+        let camera = null;
+        let isScanning = false;
+        let lastSendTime = 0;
 
-    // Try full frame
-    var imageData = ctx.getImageData(0, 0, vw, vh);
-    var code = jsQR(imageData.data, vw, vh, { inversionAttempts: "attemptBoth" });
+        async function startCamera() {
+            try {
+                lastSendTime = 0;
+                statusTxt.innerText = "Requesting camera access (check browser permissions)...";
+                sendHeight();
+                
+                // Uses Paul Miller's frontalCamera helper
+                camera = await qr.dom.frontalCamera(video);
+                
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+                statusTxt.innerText = "Scanning for QR Code...";
+                
+                // Let the video resize before starting loop
+                video.onloadedmetadata = () => {
+                    sendHeight();
+                    hiddenCanvas.width = video.videoWidth;
+                    hiddenCanvas.height = video.videoHeight;
+                    overlayCanvas.width = video.videoWidth;
+                    overlayCanvas.height = video.videoHeight;
+                    
+                    isScanning = true;
+                    scanLoop();
+                };
+            } catch (err) {
+                console.error(err);
+                statusTxt.innerText = "Error: " + err.message;
+            }
+        }
 
-    // If missed, try center 60% crop
-    if (!code) {
-      var cw = Math.round(vw * 0.6);
-      var ch = Math.round(vh * 0.6);
-      var cx = Math.round((vw - cw) / 2);
-      var cy = Math.round((vh - ch) / 2);
-      canvas.width  = cw;
-      canvas.height = ch;
-      ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-      imageData = ctx.getImageData(0, 0, cw, ch);
-      code = jsQR(imageData.data, cw, ch, { inversionAttempts: "attemptBoth" });
-    }
+        function stopCamera() {
+            isScanning = false;
+            if (camera) {
+                camera.stop();
+                camera = null;
+            }
+            btnStart.disabled = false;
+            btnStop.disabled = true;
+            statusTxt.innerText = "Camera stopped.";
+        }
 
-    if (code && code.data) {
-      // Restore full frame for capture
-      canvas.width  = vw;
-      canvas.height = vh;
-      ctx.drawImage(video, 0, 0);
-      onDetected();
-    }
-  }
+        function scanLoop() {
+            if (!isScanning) return;
+            
+            const w = video.videoWidth;
+            const h = video.videoHeight;
+            if (w === 0 || h === 0) {
+                requestAnimationFrame(scanLoop);
+                return;
+            }
 
-  // ── Start scanning loop ───────────────────────────────────────
-  function startScanLoop() {
-    var engine = hasBarcodeDetector ? 'BarcodeDetector' : 'jsQR';
-    var scanFn = hasBarcodeDetector ? scanWithBarcodeDetector : scanWithJsQR;
-    var interval = hasBarcodeDetector ? 150 : 200;  // BarcodeDetector is faster
+            const ctx = hiddenCanvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, w, h);
+            const imgData = ctx.getImageData(0, 0, w, h);
 
-    statusText.textContent = 'Scanning...';
-    statusDot.style.background = '#818cf8';
+            let lastMatrix = null;
+            let lastSize = 0;
+            let decodeSucceeded = false;
 
-    timer = setInterval(scanFn, interval);
-  }
+            try {
+                qr.decodeQR(imgData, {
+                    // This is where we hook into the unwarped matrix!
+                    imageOnDetect: (img) => {
+                        const N = img.width;
+                        lastSize = N;
+                        lastMatrix = [];
+                        
+                        for (let y = 0; y < N; y++) {
+                            let row = [];
+                            for (let x = 0; x < N; x++) {
+                                // Threshold at 128 to ensure robustness (fast-qr usually outputs 0 or 255)
+                                let isBlack = img.data[(y * N + x) * 4] < 128;
+                                row.push(isBlack ? 1 : 0);
+                            }
+                            lastMatrix.push(row);
+                        }
+                    },
+                    // Draw overlay on detected finder patterns to look cool
+                    pointsOnDetect: (points) => {
+                        const octx = overlayCanvas.getContext('2d');
+                        octx.clearRect(0, 0, w, h);
+                        
+                        octx.strokeStyle = '#00ff00';
+                        octx.lineWidth = 4;
+                        
+                        // Draw target brackets around the finder patterns
+                        points.forEach(p => {
+                            if (p.x !== undefined && p.y !== undefined) {
+                                const size = p.moduleSize ? p.moduleSize * 4 : 20;
+                                octx.beginPath();
+                                // Top-left corner
+                                octx.moveTo(p.x - size, p.y - size/2);
+                                octx.lineTo(p.x - size, p.y - size);
+                                octx.lineTo(p.x - size/2, p.y - size);
+                                // Top-right corner
+                                octx.moveTo(p.x + size/2, p.y - size);
+                                octx.lineTo(p.x + size, p.y - size);
+                                octx.lineTo(p.x + size, p.y - size/2);
+                                // Bottom-right corner
+                                octx.moveTo(p.x + size, p.y + size/2);
+                                octx.lineTo(p.x + size, p.y + size);
+                                octx.lineTo(p.x + size/2, p.y + size);
+                                // Bottom-left corner
+                                octx.moveTo(p.x - size/2, p.y + size);
+                                octx.lineTo(p.x - size, p.y + size);
+                                octx.lineTo(p.x - size, p.y + size/2);
+                                octx.stroke();
+                            }
+                        });
+                    }
+                });
+                
+                // If it reaches here, JS successfully decoded the QR code!
+                decodeSucceeded = true;
+                
+            } catch (err) {
+                // JS failed to decode (e.g. too many errors, wavy).
+            }
+            
+            if (lastMatrix) {
+                const now = Date.now();
+                if (decodeSucceeded) {
+                    Streamlit.setComponentValue({ matrix: lastMatrix, size: lastSize, ts: now });
+                    statusTxt.innerText = "QR Detected! Decoding in Python...";
+                    // DO NOT STOP CAMERA HERE so the live feed keeps going
+                    // stopCamera(); 
+                    // return; 
+                } else if (now - lastSendTime > 1500) {
+                    lastSendTime = now;
+                    Streamlit.setComponentValue({ matrix: lastMatrix, size: lastSize, ts: now });
+                    statusTxt.innerText = "Ambiguous QR detected... running Wu's List Decoder in background...";
+                    
+                    // Reset the text back to scanning after a short delay so it doesn't hang
+                    setTimeout(() => {
+                        if (isScanning && statusTxt.innerText.includes("Ambiguous")) {
+                            statusTxt.innerText = "Scanning for QR Code...";
+                        }
+                    }, 1500);
+                }
+            } else {
+                // Clear overlay if lost
+                const octx = overlayCanvas.getContext('2d');
+                octx.clearRect(0, 0, w, h);
+            }
 
-  // ── Start camera ──────────────────────────────────────────────
-  async function start() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showMsg('🔒', 'Camera Not Available',
-        'Camera access requires HTTPS or localhost.', true);
-      return;
-    }
+            requestAnimationFrame(scanLoop);
+        }
 
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width:  { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
-
-      video.srcObject = stream;
-      video.setAttribute('playsinline', '');
-
-      video.onloadedmetadata = function() {
-        video.play().then(function() {
-          // Set component height
-          var aspect = video.videoHeight / video.videoWidth;
-          var w = Math.min(480, wrap.offsetWidth || 480);
-          setFrameHeight(Math.round(w * aspect) + 16);
-          startScanLoop();
-        });
-      };
-
-    } catch (err) {
-      var name = (err && err.name) || '';
-      var msg  = (err && err.message) || 'Unknown error';
-
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-        showMsg('🔒', 'Camera Permission Denied',
-          'Allow camera access in your browser settings and reload.', true);
-      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-        showMsg('📷', 'No Camera Found', 'No camera detected on this device.', true);
-      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
-        showMsg('⚠️', 'Camera In Use',
-          'Camera may be used by another app. Close it and try again.', true);
-      } else {
-        showMsg('⚠️', 'Camera Error', 'Could not start camera: ' + msg, true);
-      }
-    }
-  }
-
-  // ── Streamlit render listener ─────────────────────────────────
-  window.addEventListener("message", function(event) {
-    if (event.data && event.data.type === "streamlit:render") { }
-  });
-
-  // ── Cleanup ───────────────────────────────────────────────────
-  window.addEventListener('beforeunload', function() {
-    if (timer) clearInterval(timer);
-    if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
-  });
-
-  // ── Go ────────────────────────────────────────────────────────
-  start();
-})();
-</script>
-
+        btnStart.addEventListener('click', startCamera);
+        btnStop.addEventListener('click', stopCamera);
+        
+        // Notify Streamlit we are ready
+        Streamlit.setComponentReady();
+        
+    </script>
 </body>
 </html>
