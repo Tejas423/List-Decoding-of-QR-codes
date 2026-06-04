@@ -189,6 +189,20 @@
             btnStop.disabled = true;
             statusTxt.innerText = "Camera stopped.";
         }
+        let lastSentHash = null;
+
+        function hashMatrix(matrix) {
+            // Simple fast hash: sample a few rows to detect if matrix changed
+            if (!matrix || matrix.length === 0) return null;
+            let h = matrix.length;
+            const step = Math.max(1, Math.floor(matrix.length / 5));
+            for (let i = 0; i < matrix.length; i += step) {
+                for (let j = 0; j < matrix[i].length; j++) {
+                    h = ((h << 5) - h + matrix[i][j]) | 0;
+                }
+            }
+            return h;
+        }
 
         function scanLoop() {
             if (!isScanning) return;
@@ -196,7 +210,7 @@
             const w = video.videoWidth;
             const h = video.videoHeight;
             if (w === 0 || h === 0) {
-                requestAnimationFrame(scanLoop);
+                setTimeout(scanLoop, 200);
                 return;
             }
 
@@ -210,7 +224,6 @@
 
             try {
                 qr.decodeQR(imgData, {
-                    // This is where we hook into the unwarped matrix!
                     imageOnDetect: (img) => {
                         const N = img.width;
                         lastSize = N;
@@ -219,82 +232,75 @@
                         for (let y = 0; y < N; y++) {
                             let row = [];
                             for (let x = 0; x < N; x++) {
-                                // Threshold at 128 to ensure robustness (fast-qr usually outputs 0 or 255)
                                 let isBlack = img.data[(y * N + x) * 4] < 128;
                                 row.push(isBlack ? 1 : 0);
                             }
                             lastMatrix.push(row);
                         }
                     },
-                    // Draw overlay on detected finder patterns to look cool
                     pointsOnDetect: (points) => {
                         const octx = overlayCanvas.getContext('2d');
                         octx.clearRect(0, 0, w, h);
                         
                         octx.strokeStyle = '#00ff00';
-                        octx.lineWidth = 4;
+                        octx.lineWidth = 3;
                         
-                        // Draw target brackets around the finder patterns
+                        // Draw bounding quad around QR code
+                        if (points.length >= 4) {
+                            octx.beginPath();
+                            octx.moveTo(points[0].x, points[0].y);
+                            for (let i = 1; i < 4; i++) {
+                                octx.lineTo(points[i].x, points[i].y);
+                            }
+                            octx.closePath();
+                            octx.stroke();
+                        }
+                        
+                        // Draw corner markers
+                        octx.fillStyle = '#00ff00';
                         points.forEach(p => {
                             if (p.x !== undefined && p.y !== undefined) {
-                                const size = p.moduleSize ? p.moduleSize * 4 : 20;
+                                const r = p.moduleSize ? p.moduleSize * 1.5 : 6;
                                 octx.beginPath();
-                                // Top-left corner
-                                octx.moveTo(p.x - size, p.y - size/2);
-                                octx.lineTo(p.x - size, p.y - size);
-                                octx.lineTo(p.x - size/2, p.y - size);
-                                // Top-right corner
-                                octx.moveTo(p.x + size/2, p.y - size);
-                                octx.lineTo(p.x + size, p.y - size);
-                                octx.lineTo(p.x + size, p.y - size/2);
-                                // Bottom-right corner
-                                octx.moveTo(p.x + size, p.y + size/2);
-                                octx.lineTo(p.x + size, p.y + size);
-                                octx.lineTo(p.x + size/2, p.y + size);
-                                // Bottom-left corner
-                                octx.moveTo(p.x - size/2, p.y + size);
-                                octx.lineTo(p.x - size, p.y + size);
-                                octx.lineTo(p.x - size, p.y + size/2);
-                                octx.stroke();
+                                octx.arc(p.x, p.y, r, 0, Math.PI * 2);
+                                octx.fill();
                             }
                         });
                     }
                 });
                 
-                // If it reaches here, JS successfully decoded the QR code!
                 decodeSucceeded = true;
                 
             } catch (err) {
-                // JS failed to decode (e.g. too many errors, wavy).
+                // JS failed to decode
             }
             
             if (lastMatrix) {
                 const now = Date.now();
-                if (decodeSucceeded) {
-                    Streamlit.setComponentValue({ matrix: lastMatrix, size: lastSize, ts: now });
-                    statusTxt.innerText = "QR Detected! Decoding in Python...";
-                    // DO NOT STOP CAMERA HERE so the live feed keeps going
-                    // stopCamera(); 
-                    // return; 
-                } else if (now - lastSendTime > 1500) {
+                const matrixHash = hashMatrix(lastMatrix);
+                const isNewMatrix = (matrixHash !== lastSentHash);
+                
+                // Throttle: send at most once per second, and only if matrix changed
+                if (isNewMatrix && (now - lastSendTime > 1000)) {
                     lastSendTime = now;
+                    lastSentHash = matrixHash;
                     Streamlit.setComponentValue({ matrix: lastMatrix, size: lastSize, ts: now });
-                    statusTxt.innerText = "Ambiguous QR detected... running Wu's List Decoder in background...";
                     
-                    // Reset the text back to scanning after a short delay so it doesn't hang
-                    setTimeout(() => {
-                        if (isScanning && statusTxt.innerText.includes("Ambiguous")) {
-                            statusTxt.innerText = "Scanning for QR Code...";
-                        }
-                    }, 1500);
+                    if (decodeSucceeded) {
+                        statusTxt.innerText = "QR detected! Sending to Python decoder...";
+                    } else {
+                        statusTxt.innerText = "Ambiguous QR detected... sending to Wu's List Decoder...";
+                    }
                 }
             } else {
-                // Clear overlay if lost
+                // Clear overlay if QR lost
                 const octx = overlayCanvas.getContext('2d');
                 octx.clearRect(0, 0, w, h);
+                lastSentHash = null;
             }
 
-            requestAnimationFrame(scanLoop);
+            // Scan every 150ms instead of every animation frame (~16ms) to save CPU
+            setTimeout(scanLoop, 150);
         }
 
         btnStart.addEventListener('click', startCamera);
