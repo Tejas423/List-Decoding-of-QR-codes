@@ -385,6 +385,379 @@ def _mask(idx, row, col):
     if idx == 7: return ((row + col) % 2 + (row * col) % 3) % 2 == 0
     return False
 
+
+def classify_qr_modules(version, ecc_level='high', mask_idx=0):
+    """
+    Classify every module in a QR code by its function type.
+    
+    Returns a dict with:
+      'grid':  2D list of strings, one of:
+               'finder', 'separator', 'alignment', 'timing',
+               'format', 'version', 'dark', 'data', 'ecc'
+      'bit_order': 2D list of int or None — the zigzag bit index for data/ecc modules
+      'codeword_idx': 2D list of int or None — which codeword byte this bit belongs to
+      'block_idx': 2D list of int or None — which RS block (after de-interleave)
+      'is_data_byte': 2D list of bool — True if the codeword is a data byte (vs ECC)
+    """
+    SIZE = 17 + 4 * version
+    grid = [['data'] * SIZE for _ in range(SIZE)]
+
+    # ── Finder patterns (7×7 core) ──
+    def mark_finder(r, c):
+        for dr in range(7):
+            for dc in range(7):
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < SIZE and 0 <= cc < SIZE:
+                    grid[rr][cc] = 'finder'
+
+    mark_finder(0, 0)
+    mark_finder(0, SIZE - 7)
+    mark_finder(SIZE - 7, 0)
+
+    # ── Separators (1-module border around finders) ──
+    for dr in range(-1, 8):
+        for dc in range(-1, 8):
+            for fr, fc in [(0, 0), (0, SIZE - 7), (SIZE - 7, 0)]:
+                rr, cc = fr + dr, fc + dc
+                if 0 <= rr < SIZE and 0 <= cc < SIZE:
+                    if dr == -1 or dr == 7 or dc == -1 or dc == 7:
+                        if grid[rr][cc] != 'finder':
+                            grid[rr][cc] = 'separator'
+
+    # ── Alignment patterns (V2+) ──
+    align_pos = QR_ALIGN.get(version, [])
+    if len(align_pos) >= 2:
+        for ar in align_pos:
+            for ac in align_pos:
+                if ar < 8 and ac < 8: continue
+                if ar < 8 and ac > SIZE - 9: continue
+                if ar > SIZE - 9 and ac < 8: continue
+                for dr in range(-2, 3):
+                    for dc in range(-2, 3):
+                        rr, cc = ar + dr, ac + dc
+                        if 0 <= rr < SIZE and 0 <= cc < SIZE:
+                            grid[rr][cc] = 'alignment'
+
+    # ── Timing patterns ──
+    for i in range(8, SIZE - 8):
+        grid[6][i] = 'timing'
+        grid[i][6] = 'timing'
+
+    # ── Dark module ──
+    grid[SIZE - 8][8] = 'dark'
+
+    # ── Format information (2 copies, 15 bits each) ──
+    fmt_pos_1 = [
+        (8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 7), (8, 8),
+        (7, 8), (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
+    ]
+    fmt_pos_2 = [
+        (SIZE-1, 8), (SIZE-2, 8), (SIZE-3, 8), (SIZE-4, 8),
+        (SIZE-5, 8), (SIZE-6, 8), (SIZE-7, 8),
+        (8, SIZE-8), (8, SIZE-7), (8, SIZE-6), (8, SIZE-5),
+        (8, SIZE-4), (8, SIZE-3), (8, SIZE-2), (8, SIZE-1),
+    ]
+    for r, c in fmt_pos_1 + fmt_pos_2:
+        grid[r][c] = 'format'
+
+    # ── Version information (V7+) ──
+    if version >= 7:
+        for i in range(18):
+            a, b = i // 3, i % 3
+            r1, c1 = a, SIZE - 11 + b
+            r2, c2 = SIZE - 11 + b, a
+            grid[r1][c1] = 'version'
+            grid[r2][c2] = 'version'
+
+    # ── Data/ECC bit order (zigzag traversal) ──
+    # Build a func mask matching _mark_function_patterns
+    func_set = set()
+    for r in range(SIZE):
+        for c in range(SIZE):
+            if grid[r][c] != 'data':
+                func_set.add((r, c))
+
+    bit_order = [[None] * SIZE for _ in range(SIZE)]
+    codeword_idx = [[None] * SIZE for _ in range(SIZE)]
+    bit_count = 0
+
+    col = SIZE - 1
+    going_up = True
+    while col >= 0:
+        if col == 6:
+            col -= 1
+        rows = range(SIZE - 1, -1, -1) if going_up else range(SIZE)
+        for row in rows:
+            for dc in [0, -1]:
+                c = col + dc
+                if c < 0 or c >= SIZE:
+                    continue
+                if (row, c) in func_set:
+                    continue
+                bit_order[row][c] = bit_count
+                codeword_idx[row][c] = bit_count // 8
+                bit_count += 1
+        col -= 2
+        going_up = not going_up
+
+    # ── Classify data vs ECC codewords ──
+    n_total = W.QR_TOTAL[version - 1]
+    ecc_per_block = W.QR_ECC_WORDS[ecc_level][version - 1]
+    nb = W.QR_BLOCKS[ecc_level][version - 1]
+    total_data = n_total - nb * ecc_per_block
+
+    blocks = W.qr_block_layout(version, ecc_level)
+    max_dk = max(b[0] for b in blocks)
+    ecc_count = blocks[0][1]
+
+    # Assign labels based on the original un-interleaved sequence (D1, D2, ... E1, E2, ...)
+    data_counters = []
+    curr_d = 1
+    for dk, ecc in blocks:
+        data_counters.append(curr_d)
+        curr_d += dk
+        
+    ecc_counters = []
+    curr_e = 1
+    for dk, ecc in blocks:
+        ecc_counters.append(curr_e)
+        curr_e += ecc
+
+    cw_info = {}  # interleaved_codeword_index -> (block_index, is_data_byte, orig_label)
+    pos = 0
+    for i in range(max_dk):
+        for j in range(nb):
+            if i < blocks[j][0]:
+                cw_info[pos] = (j, True, f"D{data_counters[j]}")
+                data_counters[j] += 1
+                pos += 1
+    for i in range(ecc_count):
+        for j in range(nb):
+            cw_info[pos] = (j, False, f"E{ecc_counters[j]}")
+            ecc_counters[j] += 1
+            pos += 1
+
+    is_data_byte = [[False] * SIZE for _ in range(SIZE)]
+    block_idx_grid = [[None] * SIZE for _ in range(SIZE)]
+    label_grid = [[None] * SIZE for _ in range(SIZE)]
+
+    for r in range(SIZE):
+        for c in range(SIZE):
+            cw = codeword_idx[r][c]
+            if cw is not None:
+                if cw in cw_info:
+                    bidx, is_d, lbl = cw_info[cw]
+                    block_idx_grid[r][c] = bidx
+                    is_data_byte[r][c] = is_d
+                    label_grid[r][c] = lbl
+                    if not is_d:
+                        grid[r][c] = 'ecc'
+                else:
+                    grid[r][c] = 'remainder'
+
+    return {
+        'grid': grid,
+        'size': SIZE,
+        'bit_order': bit_order,
+        'codeword_idx': codeword_idx,
+        'block_idx': block_idx_grid,
+        'is_data_byte': is_data_byte,
+        'label_grid': label_grid,
+        'n_blocks': nb,
+        'total_data': total_data,
+        'n_total': n_total,
+    }
+
+
+def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
+    """
+    Render a block-wise diagram of a QR code, similar to ISO specification diagrams.
+    Data/ECC bytes are grouped by thick borders and labeled (e.g. D1, E1).
+    Function patterns are drawn in standard black/white based on the matrix M.
+    """
+    from PIL import ImageDraw, ImageFont
+    info = classify_qr_modules(version, ecc_level, mask_idx)
+    SIZE = info['size']
+    grid = info['grid']
+    labels = info['label_grid']
+    blocks = info['block_idx']
+
+    # Gray shades for up to 10 blocks. Cycles through shades of gray.
+    BLOCK_COLORS = [
+        (190, 190, 190), # Block 0
+        (150, 150, 150), # Block 1
+        (110, 110, 110), # Block 2
+        (220, 220, 220), # Block 3
+        (170, 170, 170), # Block 4
+        (130, 130, 130), # Block 5
+        (200, 200, 200), # Block 6
+        (140, 140, 140), # Block 7
+    ]
+
+    img = Image.new('RGB', (SIZE * scale, SIZE * scale), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    try:
+        # Try to load a nice font, fallback to default
+        font = ImageFont.truetype("arial.ttf", max(10, scale // 2 - 2))
+    except:
+        font = ImageFont.load_default()
+
+    # 1. Fill backgrounds
+    for r in range(SIZE):
+        for c in range(SIZE):
+            x1, y1 = c * scale, r * scale
+            x2, y2 = x1 + scale, y1 + scale
+            
+            cell_type = grid[r][c]
+            if cell_type in ('data', 'ecc'):
+                bidx = blocks[r][c]
+                color = BLOCK_COLORS[bidx % len(BLOCK_COLORS)]
+                draw.rectangle([x1, y1, x2, y2], fill=color)
+            else:
+                # Function patterns -> black/white according to M
+                color = (0, 0, 0) if M[r][c] == 1 else (255, 255, 255)
+                draw.rectangle([x1, y1, x2, y2], fill=color)
+
+    # 2. Draw subtle grid lines over the data/ecc areas
+    for r in range(SIZE):
+        for c in range(SIZE):
+            if grid[r][c] in ('data', 'ecc'):
+                x1, y1 = c * scale, r * scale
+                draw.line([(x1, y1), (x1+scale, y1)], fill=(100, 100, 100), width=1)
+                draw.line([(x1, y1), (x1, y1+scale)], fill=(100, 100, 100), width=1)
+
+    # 3. Draw thick borders between different codewords
+    cw_grid = info['codeword_idx']
+    for r in range(SIZE):
+        for c in range(SIZE):
+            cw = cw_grid[r][c]
+            x1, y1 = c * scale, r * scale
+            x2, y2 = x1 + scale, y1 + scale
+            
+            # Check right neighbor
+            if c + 1 < SIZE:
+                if cw != cw_grid[r][c+1] or cw is None:
+                    draw.line([(x2, y1), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
+            else:
+                draw.line([(x2, y1), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
+                
+            # Check bottom neighbor
+            if r + 1 < SIZE:
+                if cw != cw_grid[r+1][c] or cw is None:
+                    draw.line([(x1, y2), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
+            else:
+                draw.line([(x1, y2), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
+                
+            # Also draw thick border on left/top of the whole QR code
+            if c == 0:
+                draw.line([(x1, y1), (x1, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
+            if r == 0:
+                draw.line([(x1, y1), (x2, y1)], fill=(0, 0, 0), width=max(2, scale // 10))
+
+    # 4. Draw labels in the center of each codeword
+    # Gather coordinates for each codeword
+    cw_coords = {}
+    for r in range(SIZE):
+        for c in range(SIZE):
+            cw = cw_grid[r][c]
+            if cw is not None:
+                if cw not in cw_coords:
+                    cw_coords[cw] = []
+                cw_coords[cw].append((r, c))
+
+    for cw, coords in cw_coords.items():
+        # Get the label from the first module of this codeword
+        r0, c0 = coords[0]
+        label = labels[r0][c0]
+        if not label:
+            continue
+            
+        # Find centroid of this codeword
+        avg_r = sum(r for r, c in coords) / len(coords)
+        avg_c = sum(c for r, c in coords) / len(coords)
+        
+        # We want to place the text near the centroid.
+        # Find the module closest to the centroid
+        best_dist = float('inf')
+        best_module = coords[0]
+        for r, c in coords:
+            dist = (r - avg_r)**2 + (c - avg_c)**2
+            if dist < best_dist:
+                best_dist = dist
+                best_module = (r, c)
+                
+        # Draw text centered in that module
+        mr, mc = best_module
+        center_x = mc * scale + scale // 2
+        center_y = mr * scale + scale // 2
+        
+        # Calculate text bounding box to center it
+        try:
+            bbox = font.getbbox(label)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+        except:
+            tw, th = draw.textsize(label, font=font)
+            
+        text_x = center_x - tw / 2
+        text_y = center_y - th / 2 - (scale // 8) # tweak vertical alignment
+        
+        # Draw text with a slight white halo for readability
+        for ox, oy in [(-1,0), (1,0), (0,-1), (0,1)]:
+            draw.text((text_x+ox, text_y+oy), label, fill=(255,255,255), font=font)
+        draw.text((text_x, text_y), label, fill=(0,0,0), font=font)
+
+    # 5. Draw letters on function modules
+    FUNC_LABELS = {
+        'finder': 'F',
+        'timing': 'T',
+        'alignment': 'A',
+        'format': 'I',
+        'version': 'V',
+    }
+    
+    try:
+        func_font = ImageFont.truetype("arial.ttf", max(8, scale // 2 - 4))
+    except:
+        func_font = font
+
+    for r in range(SIZE):
+        for c in range(SIZE):
+            cell_type = grid[r][c]
+            if cell_type in FUNC_LABELS:
+                label = FUNC_LABELS[cell_type]
+                is_dark = (M[r][c] == 1)
+                
+                center_x = c * scale + scale // 2
+                center_y = r * scale + scale // 2
+                
+                try:
+                    bbox = func_font.getbbox(label)
+                    tw = bbox[2] - bbox[0]
+                    th = bbox[3] - bbox[1]
+                except:
+                    tw, th = draw.textsize(label, font=func_font)
+                    
+                text_x = center_x - tw / 2
+                text_y = center_y - th / 2 - (scale // 8)
+                
+                text_color = (255, 255, 255) if is_dark else (0, 0, 0)
+                draw.text((text_x, text_y), label, fill=text_color, font=func_font)
+
+    return img, info
+
+
+def _dim(color, factor):
+    """Darken a color by a factor."""
+    return tuple(int(c * factor) for c in color)
+
+
+
+
+
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Penalty Scoring & Best Mask Selection
 # ═══════════════════════════════════════════════════════════════════════════════

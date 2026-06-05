@@ -955,6 +955,155 @@ with tab1:
     st.download_button(f"💾 Download Corrupted QR ({t_errors} errors)",
                        data=buf.getvalue(), file_name="corrupted_qr.png", mime="image/png")
 
+    st.write("")
+    with st.expander("🔬 QR Code Anatomy Visualization", expanded=False):
+        st.markdown("""
+        <p style="color:#94a3b8; margin-bottom:8px; font-size:0.9rem;">
+            Explore the internal structure of the generated QR code.
+            See exactly where finder patterns, timing, data bits, and error correction bytes live.
+        </p>
+        """, unsafe_allow_html=True)
+
+        viz_size = 17 + 4 * ver
+        if viz_size <= 25:
+            viz_scale = 16
+        elif viz_size <= 45:
+            viz_scale = 12
+        elif viz_size <= 80:
+            viz_scale = 8
+        elif viz_size <= 120:
+            viz_scale = 5
+        else:
+            viz_scale = 3
+
+        with st.spinner("Generating block layout..."):
+            # Use fixed large scale for readability of text labels
+            viz_scale = max(20, 800 // (17 + 4 * ver))
+            anatomy_img, anatomy_info = Q.render_qr_blocks(qr_orig, ver, level, scale=viz_scale, mask_idx=mask_used)
+
+        img_col, info_col = st.columns([3, 2])
+
+        with img_col:
+            st.markdown('<div class="section-label">Block-wise Codeword Map</div>', unsafe_allow_html=True)
+            st.image(anatomy_img, use_container_width=True)
+            st.caption("Each bordered shape represents one 8-bit Reed-Solomon codeword. "
+                       "Data bytes are labeled **D#**, and ECC bytes are labeled **E#**.")
+
+        with info_col:
+            st.markdown('<div class="section-label">Legend</div>', unsafe_allow_html=True)
+            
+            # Show function patterns explanation
+            st.markdown("""
+            <div style="font-size:0.85rem; color:#cbd5e1; margin-bottom:12px;">
+                <strong>Function Patterns</strong> are drawn as standard black & white modules, but each module is marked with a letter to differentiate its role:
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:16px; font-size:0.85rem;">
+                <div><strong style="font-family:monospace; font-size:1.1rem; color:#fff;">F</strong> = Finder</div>
+                <div><strong style="font-family:monospace; font-size:1.1rem; color:#fff;">T</strong> = Timing</div>
+                <div><strong style="font-family:monospace; font-size:1.1rem; color:#fff;">A</strong> = Alignment</div>
+                <div><strong style="font-family:monospace; font-size:1.1rem; color:#fff;">I</strong> = Format Info</div>
+                <div><strong style="font-family:monospace; font-size:1.1rem; color:#fff;">V</strong> = Version Info</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            blocks = W.qr_block_layout(ver, level)
+            nb_blocks = len(blocks)
+            block_bounds = W.qr_block_bounds(ver, level)
+            
+            # Recreate the shades of gray used in qr_demo.py render_qr_blocks
+            BLOCK_COLORS = [
+                "#bebebe", # 190
+                "#969696", # 150
+                "#6e6e6e", # 110
+                "#dcdcdc", # 220
+                "#aaaaaa", # 170
+                "#828282", # 130
+                "#c8c8c8", # 200
+                "#8c8c8c", # 140
+            ]
+            
+            # Show Block shading legend
+            legend_html = ""
+            for i, (dk, ecc) in enumerate(blocks):
+                d_start = sum(b[0] for b in blocks[:i]) + 1
+                d_end = sum(b[0] for b in blocks[:i+1])
+                e_start = sum(b[1] for b in blocks[:i]) + 1
+                e_end = sum(b[1] for b in blocks[:i+1])
+                color = BLOCK_COLORS[i % len(BLOCK_COLORS)]
+                
+                legend_html += f"""
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:0.85rem;">
+                    <div style="width:20px; height:20px; background-color:{color}; border:1px solid #333;"></div>
+                    <div>
+                        <span style="font-weight:600; color:#fff;">D{d_start} - D{d_end}</span> / <span style="font-weight:600; color:#fff;">E{e_start} - E{e_end}</span> 
+                        <span style="color:#94a3b8;">(Block {i+1})</span>
+                    </div>
+                </div>
+                """
+                
+            st.markdown(legend_html, unsafe_allow_html=True)
+            st.write("")
+
+            st.markdown('<div class="section-label">Structure Summary</div>', unsafe_allow_html=True)
+
+            grid = anatomy_info['grid']
+            total_modules = anatomy_info['size'] ** 2
+            
+            s1, s2 = st.columns(2)
+            with s1:
+                st.metric("Grid Size", f"{anatomy_info['size']}×{anatomy_info['size']}")
+            with s2:
+                st.metric("Total Modules", f"{total_modules:,}")
+
+            st.markdown('<div class="section-label">Reed-Solomon Block Layout</div>', unsafe_allow_html=True)
+
+            block_data_table = []
+            for i, ((dk, ecc), bounds) in enumerate(zip(blocks, block_bounds)):
+                block_data_table.append({
+                    "Block": f"#{i+1}",
+                    "RS Code": f"RS({dk+ecc},{dk})",
+                    "Data Bytes": dk,
+                    "ECC Bytes": ecc,
+                    "BM Radius (t₀)": bounds['t0'],
+                    "Wu Radius (t_max)": bounds['t_max'],
+                    "Wu Gain": f"+{bounds['gap']}"
+                })
+
+            st.dataframe(block_data_table, use_container_width=True, hide_index=True)
+
+            st.markdown('<div class="section-label">Capacity Breakdown</div>', unsafe_allow_html=True)
+
+            cap_c1, cap_c2 = st.columns(2)
+            with cap_c1:
+                st.markdown(f"""
+                <div style="background:rgba(50,180,80,0.08); border:1px solid rgba(50,180,80,0.2);
+                            border-radius:10px; padding:1rem; text-align:center;">
+                    <div style="font-size:2rem; font-weight:700; color:#32b450;">{anatomy_info['total_data']}</div>
+                    <div style="color:#94a3b8; font-size:0.85rem;">Data Bytes</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with cap_c2:
+                ecc_total = anatomy_info['n_total'] - anatomy_info['total_data']
+                st.markdown(f"""
+                <div style="background:rgba(60,120,220,0.08); border:1px solid rgba(60,120,220,0.2);
+                            border-radius:10px; padding:1rem; text-align:center;">
+                    <div style="font-size:2rem; font-weight:700; color:#3c78dc;">{ecc_total}</div>
+                    <div style="color:#94a3b8; font-size:0.85rem;">ECC Bytes ({nb_blocks} block{'s' if nb_blocks > 1 else ''})</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown('<div class="section-label">Data Placement Path</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06);
+                    border-radius:10px; padding:1rem; font-size:0.85rem; color:#cbd5e1;">
+            <p style="margin:0 0 8px 0;">Data and ECC codewords are placed in a <strong>zigzag pattern</strong>
+            starting from the <strong>bottom-right corner</strong>, moving upward in 2-column strips,
+            alternating direction on each strip. Column 6 (the vertical timing pattern) is always skipped.</p>
+            <p style="margin:0;">After placement, a <strong>mask pattern</strong> (Mask {mask_used}) is XOR'd over the data modules
+            to break up large areas of same-color modules and improve scanner reliability.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  TAB 2: Upload & Decode
