@@ -738,6 +738,7 @@ with tab1:
     bm_ok = wu_ok = False
     bm_text = wu_text = None
     qr_recovered = None
+    wu_cands = []
 
     if t_errors == 0:
         bm_ok = wu_ok = True

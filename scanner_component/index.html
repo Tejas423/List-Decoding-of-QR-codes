@@ -242,29 +242,81 @@
                         const octx = overlayCanvas.getContext('2d');
                         octx.clearRect(0, 0, w, h);
                         
-                        octx.strokeStyle = '#00ff00';
-                        octx.lineWidth = 3;
+                        if (points.length < 3) return;
                         
-                        // Draw bounding quad around QR code
-                        if (points.length >= 4) {
-                            octx.beginPath();
-                            octx.moveTo(points[0].x, points[0].y);
-                            for (let i = 1; i < 4; i++) {
-                                octx.lineTo(points[i].x, points[i].y);
-                            }
-                            octx.closePath();
-                            octx.stroke();
-                        }
-                        
-                        // Draw corner markers
-                        octx.fillStyle = '#00ff00';
+                        // Get average moduleSize from finder patterns
+                        let avgMod = 0;
+                        let modCount = 0;
                         points.forEach(p => {
-                            if (p.x !== undefined && p.y !== undefined) {
-                                const r = p.moduleSize ? p.moduleSize * 1.5 : 6;
-                                octx.beginPath();
-                                octx.arc(p.x, p.y, r, 0, Math.PI * 2);
-                                octx.fill();
-                            }
+                            if (p.moduleSize) { avgMod += p.moduleSize; modCount++; }
+                        });
+                        avgMod = modCount > 0 ? avgMod / modCount : 5;
+                        
+                        // Finder centers are ~3.5 modules inward from the QR edge.
+                        // Expand each point outward from the centroid by this offset.
+                        const expand = avgMod * 3.5;
+                        
+                        // Compute centroid of the detected points
+                        let cx = 0, cy = 0;
+                        const pts = points.slice(0, Math.min(points.length, 4));
+                        pts.forEach(p => { cx += p.x; cy += p.y; });
+                        cx /= pts.length;
+                        cy /= pts.length;
+                        
+                        // Expand each point outward from centroid
+                        const expanded = pts.map(p => {
+                            const dx = p.x - cx;
+                            const dy = p.y - cy;
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist === 0) return { x: p.x, y: p.y };
+                            const scale = (dist + expand) / dist;
+                            return { x: cx + dx * scale, y: cy + dy * scale };
+                        });
+                        
+                        // Draw semi-transparent fill
+                        octx.fillStyle = 'rgba(0, 255, 100, 0.08)';
+                        octx.beginPath();
+                        octx.moveTo(expanded[0].x, expanded[0].y);
+                        for (let i = 1; i < expanded.length; i++) {
+                            octx.lineTo(expanded[i].x, expanded[i].y);
+                        }
+                        octx.closePath();
+                        octx.fill();
+                        
+                        // Draw the expanded border
+                        octx.strokeStyle = '#00ff88';
+                        octx.lineWidth = 2.5;
+                        octx.setLineDash([]);
+                        octx.beginPath();
+                        octx.moveTo(expanded[0].x, expanded[0].y);
+                        for (let i = 1; i < expanded.length; i++) {
+                            octx.lineTo(expanded[i].x, expanded[i].y);
+                        }
+                        octx.closePath();
+                        octx.stroke();
+                        
+                        // Draw corner brackets at each expanded corner
+                        octx.strokeStyle = '#00ff88';
+                        octx.lineWidth = 3;
+                        const bLen = avgMod * 3; // bracket arm length
+                        expanded.forEach((corner, idx) => {
+                            // Get directions toward the two adjacent edges
+                            const prev = expanded[(idx - 1 + expanded.length) % expanded.length];
+                            const next = expanded[(idx + 1) % expanded.length];
+                            
+                            // Direction vectors (normalized) along edges from this corner
+                            let d1x = prev.x - corner.x, d1y = prev.y - corner.y;
+                            let d2x = next.x - corner.x, d2y = next.y - corner.y;
+                            const len1 = Math.sqrt(d1x*d1x + d1y*d1y) || 1;
+                            const len2 = Math.sqrt(d2x*d2x + d2y*d2y) || 1;
+                            d1x /= len1; d1y /= len1;
+                            d2x /= len2; d2y /= len2;
+                            
+                            octx.beginPath();
+                            octx.moveTo(corner.x + d1x * bLen, corner.y + d1y * bLen);
+                            octx.lineTo(corner.x, corner.y);
+                            octx.lineTo(corner.x + d2x * bLen, corner.y + d2y * bLen);
+                            octx.stroke();
                         });
                     }
                 });
@@ -280,8 +332,8 @@
                 const matrixHash = hashMatrix(lastMatrix);
                 const isNewMatrix = (matrixHash !== lastSentHash);
                 
-                // Throttle: send at most once per second, and only if matrix changed
-                if (isNewMatrix && (now - lastSendTime > 1000)) {
+                // Throttle: send at most once per 300ms, and only if matrix changed
+                if (isNewMatrix && (now - lastSendTime > 300)) {
                     lastSendTime = now;
                     lastSentHash = matrixHash;
                     Streamlit.setComponentValue({ matrix: lastMatrix, size: lastSize, ts: now });
@@ -296,11 +348,10 @@
                 // Clear overlay if QR lost
                 const octx = overlayCanvas.getContext('2d');
                 octx.clearRect(0, 0, w, h);
-                lastSentHash = null;
             }
 
-            // Scan every 150ms instead of every animation frame (~16ms) to save CPU
-            setTimeout(scanLoop, 150);
+            // Scan using requestAnimationFrame for smooth 60fps tracking (like the pure JS repo)
+            requestAnimationFrame(scanLoop);
         }
 
         btnStart.addEventListener('click', startCamera);
