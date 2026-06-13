@@ -17,16 +17,13 @@ from PIL import Image
 import wu_qr as W
 import random, math, os
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  QR Version Parameters (V1–V40)
-#  Tables mirror wu_qr.QR_* and the QR-2005 standard.
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- QR Version Parameters (V1-V40) ---
 
 QR_ECC_WORDS = W.QR_ECC_WORDS
 QR_TOTAL = W.QR_TOTAL
 QR_BLOCKS = W.QR_BLOCKS
 
-# Alignment pattern center positions per version (Annex E, ISO/IEC 18004).
+# alignment pattern centers per version (Annex E, ISO 18004)
 QR_ALIGN = {
     1:  [],
     2:  [6, 18],
@@ -70,7 +67,7 @@ QR_ALIGN = {
     40: [6, 30, 58, 86, 114, 142, 170],
 }
 
-# BCH(18,6) generator for the V7+ version-information block.
+# BCH(18,6) generator for V7+ version info
 VERSION_BCH_GEN = 0x1F25
 
 def compute_version_bits(version):
@@ -83,7 +80,7 @@ def compute_version_bits(version):
             rem ^= VERSION_BCH_GEN << i
     return (version << 12) | rem
 
-# Format bits: BCH(15,5) encoding identical to paulmillr-qr
+# format bits: BCH(15,5), matches paulmillr-qr
 ECC_INDICATOR = {'low': 1, 'medium': 0, 'quartile': 3, 'high': 2}
 FORMAT_MASK_XOR = 21522
 FORMAT_GEN = 1335
@@ -98,14 +95,8 @@ def compute_format_bits(ecc_level, mask_idx):
 
 
 def qr_config(version, level):
-    """
-    Return (n_total, k_data, ecc_words, size, max_chars) for any QR version.
+    """Return (n_total, k_data, ecc_words, size, max_chars) for a QR version."""
 
-    n_total is the full interleaved codeword length and k_data is the
-    sum of user-data bytes across every block in the version. For multi-
-    block configs ecc_words is the per-block ECC count (all blocks share it).
-    Returns None for invalid versions/levels.
-    """
     idx = version - 1
     if idx < 0 or idx >= len(QR_TOTAL):
         return None
@@ -118,8 +109,7 @@ def qr_config(version, level):
     n_total = sum(b[0] + b[1] for b in blocks)
     k_data = sum(b[0] for b in blocks)
     size = 17 + 4 * version
-    # Byte-mode header overhead: mode (4b) + count (8b for V1-9, 16b for V10+)
-    # + terminator (4b). Round to bytes.
+    # byte-mode header overhead
     count_bits = 8 if version <= 9 else 16
     overhead_bytes = (4 + count_bits + 4 + 7) // 8
     max_chars = max(0, k_data - overhead_bytes)
@@ -169,28 +159,21 @@ def all_configs(versions=None):
             })
     return configs
 
-# Expose V1-High as defaults for backward compat
+# V1-High defaults for backward compat
 ECC_LEVEL = 'high'
 ECC_WORDS = 17
 DATA_WORDS = 9
 TOTAL_WORDS = 26
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  QR Matrix Builder (V1–V40)
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- QR Matrix Builder (V1-V40) ---
 
 def _mark_function_patterns(version):
-    """
-    Build a (M, func) pair pre-populated with all function patterns
-    (finders, alignment, timing, dark module, format-info reservation,
-    version-info reservation).  Returns module values 0/1 in M and a
-    boolean mask in func marking every reserved cell.
-    """
+    """Build matrix M and function-pattern mask for a given QR version."""
     SIZE = 17 + 4 * version
     M = [[0] * SIZE for _ in range(SIZE)]
     func = [[False] * SIZE for _ in range(SIZE)]
 
-    # ── Finder patterns (7×7 + 1-module separator) ──
+    # finder patterns (7x7 + separator)
     def place_finder(r, c):
         for dr in range(-1, 8):
             for dc in range(-1, 8):
@@ -211,8 +194,7 @@ def _mark_function_patterns(version):
     place_finder(0, SIZE - 7)
     place_finder(SIZE - 7, 0)
 
-    # ── Alignment patterns (V2+) ──
-    # Skip any alignment whose center sits on top of a finder pattern.
+    # alignment patterns (V2+), skip those overlapping finders
     align_pos = QR_ALIGN.get(version, [])
     if len(align_pos) >= 2:
         for ar in align_pos:
@@ -235,18 +217,18 @@ def _mark_function_patterns(version):
                                 M[rr][cc] = 0
                             func[rr][cc] = True
 
-    # ── Timing patterns ──
+    # timing patterns
     for i in range(8, SIZE - 8):
         M[6][i] = 1 if i % 2 == 0 else 0
         func[6][i] = True
         M[i][6] = 1 if i % 2 == 0 else 0
         func[i][6] = True
 
-    # ── Dark module ──
+    # dark module
     M[SIZE - 8][8] = 1
     func[SIZE - 8][8] = True
 
-    # ── Reserve format-info cells ──
+    # reserve format-info cells
     fmt_pos_1 = [
         (8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 7), (8, 8),
         (7, 8), (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
@@ -260,7 +242,7 @@ def _mark_function_patterns(version):
     for r, c in fmt_pos_1 + fmt_pos_2:
         func[r][c] = True
 
-    # ── Reserve version-info cells (V7+) ──
+    # reserve version-info cells (V7+)
     if version >= 7:
         for i in range(18):
             a, b = i // 3, i % 3
@@ -299,14 +281,14 @@ def make_qr_matrix(codewords, mask_idx=0, version=1, ecc_level='high'):
     SIZE = 17 + 4 * version
     M, func, fmt_pos_1, fmt_pos_2 = _mark_function_patterns(version)
 
-    # ── Format information (2 copies) ──
+    # format info (2 copies)
     fbits = compute_format_bits(ecc_level, mask_idx)
     _place_format_bits(M, fbits, fmt_pos_1, fmt_pos_2)
 
-    # ── Version information (V7+) ──
+    # version info (V7+)
     _place_version_bits(M, version)
 
-    # ── Data placement (zigzag) ──
+    # data placement (zigzag)
     bits = []
     for byte in codewords:
         for b in range(7, -1, -1):
@@ -340,11 +322,10 @@ def extract_qr_data(M, mask_idx=0, version=1, ecc_level='high'):
     """Extract codeword bytes from a QR matrix (V1–V40)."""
     SIZE = 17 + 4 * version
     n_total = QR_TOTAL[version - 1]
-    # Reuse the same function-pattern marker as the encoder so reservation
-    # for finders, alignment, timing, format, and version info matches exactly.
+    # reuse the encoder's function-pattern mask so reservations match exactly
     _, func, _, _ = _mark_function_patterns(version)
 
-    # Read data bits in zigzag
+    # read data bits in zigzag order
     bits = []
     col = SIZE - 1
     going_up = True
@@ -364,7 +345,7 @@ def extract_qr_data(M, mask_idx=0, version=1, ecc_level='high'):
         col -= 2
         going_up = not going_up
 
-    # Bits → bytes
+    # bits -> bytes
     codewords = []
     for i in range(0, len(bits) - 7, 8):
         byte = 0
@@ -387,22 +368,12 @@ def _mask(idx, row, col):
 
 
 def classify_qr_modules(version, ecc_level='high', mask_idx=0):
-    """
-    Classify every module in a QR code by its function type.
-    
-    Returns a dict with:
-      'grid':  2D list of strings, one of:
-               'finder', 'separator', 'alignment', 'timing',
-               'format', 'version', 'dark', 'data', 'ecc'
-      'bit_order': 2D list of int or None — the zigzag bit index for data/ecc modules
-      'codeword_idx': 2D list of int or None — which codeword byte this bit belongs to
-      'block_idx': 2D list of int or None — which RS block (after de-interleave)
-      'is_data_byte': 2D list of bool — True if the codeword is a data byte (vs ECC)
-    """
+    """Classify every module by function type (finder, timing, data, ecc, etc.)."""
+
     SIZE = 17 + 4 * version
     grid = [['data'] * SIZE for _ in range(SIZE)]
 
-    # ── Finder patterns (7×7 core) ──
+    # finder patterns
     def mark_finder(r, c):
         for dr in range(7):
             for dc in range(7):
@@ -414,7 +385,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
     mark_finder(0, SIZE - 7)
     mark_finder(SIZE - 7, 0)
 
-    # ── Separators (1-module border around finders) ──
+    # separators around finders
     for dr in range(-1, 8):
         for dc in range(-1, 8):
             for fr, fc in [(0, 0), (0, SIZE - 7), (SIZE - 7, 0)]:
@@ -424,7 +395,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
                         if grid[rr][cc] != 'finder':
                             grid[rr][cc] = 'separator'
 
-    # ── Alignment patterns (V2+) ──
+    # alignment patterns (V2+)
     align_pos = QR_ALIGN.get(version, [])
     if len(align_pos) >= 2:
         for ar in align_pos:
@@ -438,15 +409,15 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
                         if 0 <= rr < SIZE and 0 <= cc < SIZE:
                             grid[rr][cc] = 'alignment'
 
-    # ── Timing patterns ──
+    # timing patterns
     for i in range(8, SIZE - 8):
         grid[6][i] = 'timing'
         grid[i][6] = 'timing'
 
-    # ── Dark module ──
+    # dark module
     grid[SIZE - 8][8] = 'dark'
 
-    # ── Format information (2 copies, 15 bits each) ──
+    # format info (2 copies, 15 bits each)
     fmt_pos_1 = [
         (8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 7), (8, 8),
         (7, 8), (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
@@ -460,7 +431,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
     for r, c in fmt_pos_1 + fmt_pos_2:
         grid[r][c] = 'format'
 
-    # ── Version information (V7+) ──
+    # version info (V7+)
     if version >= 7:
         for i in range(18):
             a, b = i // 3, i % 3
@@ -469,8 +440,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
             grid[r1][c1] = 'version'
             grid[r2][c2] = 'version'
 
-    # ── Data/ECC bit order (zigzag traversal) ──
-    # Build a func mask matching _mark_function_patterns
+    # data/ecc bit order via zigzag traversal
     func_set = set()
     for r in range(SIZE):
         for c in range(SIZE):
@@ -500,7 +470,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
         col -= 2
         going_up = not going_up
 
-    # ── Classify data vs ECC codewords ──
+    # classify data vs ECC codewords
     n_total = W.QR_TOTAL[version - 1]
     ecc_per_block = W.QR_ECC_WORDS[ecc_level][version - 1]
     nb = W.QR_BLOCKS[ecc_level][version - 1]
@@ -510,7 +480,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
     max_dk = max(b[0] for b in blocks)
     ecc_count = blocks[0][1]
 
-    # Assign labels based on the original un-interleaved sequence (D1, D2, ... E1, E2, ...)
+    # assign labels based on the un-interleaved sequence (D1, D2, ... E1, E2, ...)
     data_counters = []
     curr_d = 1
     for dk, ecc in blocks:
@@ -570,11 +540,7 @@ def classify_qr_modules(version, ecc_level='high', mask_idx=0):
 
 
 def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
-    """
-    Render a block-wise diagram of a QR code, similar to ISO specification diagrams.
-    Data/ECC bytes are grouped by thick borders and labeled (e.g. D1, E1).
-    Function patterns are drawn in standard black/white based on the matrix M.
-    """
+    """Render a block-wise QR diagram with labeled codewords (D1, E1, etc.)."""
     from PIL import ImageDraw, ImageFont
     info = classify_qr_modules(version, ecc_level, mask_idx)
     SIZE = info['size']
@@ -582,7 +548,7 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
     labels = info['label_grid']
     blocks = info['block_idx']
 
-    # Gray shades for up to 10 blocks. Cycles through shades of gray.
+    # block color palette (cycles for >8 blocks)
     BLOCK_COLORS = [
         (190, 190, 190), # Block 0
         (150, 150, 150), # Block 1
@@ -598,12 +564,12 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
     draw = ImageDraw.Draw(img)
 
     try:
-        # Try to load a nice font, fallback to default
+
         font = ImageFont.truetype("arial.ttf", max(10, scale // 2 - 2))
     except:
         font = ImageFont.load_default()
 
-    # 1. Fill backgrounds
+    # fill backgrounds
     for r in range(SIZE):
         for c in range(SIZE):
             x1, y1 = c * scale, r * scale
@@ -615,11 +581,11 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
                 color = BLOCK_COLORS[bidx % len(BLOCK_COLORS)]
                 draw.rectangle([x1, y1, x2, y2], fill=color)
             else:
-                # Function patterns -> black/white according to M
+
                 color = (0, 0, 0) if M[r][c] == 1 else (255, 255, 255)
                 draw.rectangle([x1, y1, x2, y2], fill=color)
 
-    # 2. Draw subtle grid lines over the data/ecc areas
+    # grid lines over data/ecc areas
     for r in range(SIZE):
         for c in range(SIZE):
             if grid[r][c] in ('data', 'ecc'):
@@ -627,7 +593,7 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
                 draw.line([(x1, y1), (x1+scale, y1)], fill=(100, 100, 100), width=1)
                 draw.line([(x1, y1), (x1, y1+scale)], fill=(100, 100, 100), width=1)
 
-    # 3. Draw thick borders between different codewords
+    # thick borders between different codewords
     cw_grid = info['codeword_idx']
     for r in range(SIZE):
         for c in range(SIZE):
@@ -635,28 +601,27 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
             x1, y1 = c * scale, r * scale
             x2, y2 = x1 + scale, y1 + scale
             
-            # Check right neighbor
+
             if c + 1 < SIZE:
                 if cw != cw_grid[r][c+1] or cw is None:
                     draw.line([(x2, y1), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
             else:
                 draw.line([(x2, y1), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
                 
-            # Check bottom neighbor
+
             if r + 1 < SIZE:
                 if cw != cw_grid[r+1][c] or cw is None:
                     draw.line([(x1, y2), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
             else:
                 draw.line([(x1, y2), (x2, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
                 
-            # Also draw thick border on left/top of the whole QR code
+            # border on left/top edge
             if c == 0:
                 draw.line([(x1, y1), (x1, y2)], fill=(0, 0, 0), width=max(2, scale // 10))
             if r == 0:
                 draw.line([(x1, y1), (x2, y1)], fill=(0, 0, 0), width=max(2, scale // 10))
 
-    # 4. Draw labels in the center of each codeword
-    # Gather coordinates for each codeword
+    # label each codeword at its centroid
     cw_coords = {}
     for r in range(SIZE):
         for c in range(SIZE):
@@ -667,18 +632,17 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
                 cw_coords[cw].append((r, c))
 
     for cw, coords in cw_coords.items():
-        # Get the label from the first module of this codeword
+
         r0, c0 = coords[0]
         label = labels[r0][c0]
         if not label:
             continue
             
-        # Find centroid of this codeword
+
         avg_r = sum(r for r, c in coords) / len(coords)
         avg_c = sum(c for r, c in coords) / len(coords)
         
-        # We want to place the text near the centroid.
-        # Find the module closest to the centroid
+        # find module closest to centroid
         best_dist = float('inf')
         best_module = coords[0]
         for r, c in coords:
@@ -687,12 +651,12 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
                 best_dist = dist
                 best_module = (r, c)
                 
-        # Draw text centered in that module
+
         mr, mc = best_module
         center_x = mc * scale + scale // 2
         center_y = mr * scale + scale // 2
         
-        # Calculate text bounding box to center it
+
         try:
             bbox = font.getbbox(label)
             tw = bbox[2] - bbox[0]
@@ -703,12 +667,12 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
         text_x = center_x - tw / 2
         text_y = center_y - th / 2 - (scale // 8) # tweak vertical alignment
         
-        # Draw text with a slight white halo for readability
+        # white halo for readability
         for ox, oy in [(-1,0), (1,0), (0,-1), (0,1)]:
             draw.text((text_x+ox, text_y+oy), label, fill=(255,255,255), font=font)
         draw.text((text_x, text_y), label, fill=(0,0,0), font=font)
 
-    # 5. Draw letters on function modules
+    # letter labels on function modules
     FUNC_LABELS = {
         'finder': 'F',
         'timing': 'T',
@@ -749,7 +713,6 @@ def render_qr_blocks(M, version, ecc_level='high', scale=30, mask_idx=0):
 
 
 def _dim(color, factor):
-    """Darken a color by a factor."""
     return tuple(int(c * factor) for c in color)
 
 
@@ -758,16 +721,14 @@ def _dim(color, factor):
 
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Penalty Scoring & Best Mask Selection
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Penalty Scoring & Best Mask Selection ---
 
 def penalty_score(M):
     """QR penalty score (all 4 rules)."""
     SIZE = len(M)
     penalty = 0
 
-    # Rule 1: runs of 5+ same-color modules
+    # rule 1: runs of 5+ same-color modules
     def rule1(row):
         p, run, last = 0, 1, None
         for cell in row:
@@ -786,13 +747,13 @@ def penalty_score(M):
         penalty += rule1(M[r])
         penalty += rule1([M[i][r] for i in range(SIZE)])
 
-    # Rule 2: 2×2 blocks of same color
+    # rule 2: 2x2 blocks of same color
     for r in range(SIZE - 1):
         for c in range(SIZE - 1):
             if M[r][c] == M[r][c+1] == M[r+1][c] == M[r+1][c+1]:
                 penalty += 3
 
-    # Rule 3: finder-like patterns
+    # rule 3: finder-like patterns
     p1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0]
     p2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1]
     def rule3(row):
@@ -807,7 +768,7 @@ def penalty_score(M):
         penalty += rule3(M[r])
         penalty += rule3([M[i][r] for i in range(SIZE)])
 
-    # Rule 4: dark module proportion
+    # rule 4: dark module proportion
     dark = sum(sum(row) for row in M)
     pct = (dark * 100) // (SIZE * SIZE)
     penalty += 10 * int(abs(pct - 50) / 5)
@@ -825,9 +786,7 @@ def get_best_qr_matrix(codewords, version=1, ecc_level='high'):
             best_M, best_p, best_i = M, p, i
     return best_M, best_i
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Text ↔ QR Data Bytes
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Text <-> QR Data Bytes ---
 
 def qr_encode_text(text, data_words=None, max_chars=None, version=1):
     """Encode text into QR data bytes (byte mode). V10+ uses 16-bit count."""
@@ -840,7 +799,7 @@ def qr_encode_text(text, data_words=None, max_chars=None, version=1):
     text_bytes = text.encode('utf-8')[:max_chars]
     length = len(text_bytes)
 
-    # Bit stream: mode (0100) + count + data + terminator
+    # bit stream: mode (0100) + count + data + terminator
     bits = [0, 1, 0, 0]
     for b in range(count_bits - 1, -1, -1):
         bits.append((length >> b) & 1)
@@ -901,9 +860,7 @@ def qr_decode_text(data_bytes, version=1):
         return bytes(chars).decode('utf-8', errors='replace')
     return None
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Image Rendering
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Image Rendering ---
 
 def render_qr(matrix, scale=20, border=4, fg=(0, 0, 0), bg=(255, 255, 255)):
     """Render QR matrix as a PIL Image."""
@@ -923,11 +880,9 @@ def render_qr(matrix, scale=20, border=4, fg=(0, 0, 0), bg=(255, 255, 255)):
 
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  QR Image Reader — image → binary matrix → codewords
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- QR Image Reader ---
 
-# Canonical 7×7 finder pattern (1 = dark module).
+# canonical 7x7 finder pattern
 _FINDER_PATTERN = [
     [1, 1, 1, 1, 1, 1, 1],
     [1, 0, 0, 0, 0, 0, 1],
@@ -965,15 +920,14 @@ def _finder_score(matrix, grid_size):
 
 
 def _sample_matrix_vec(binary, side, grid_size):
-    """Sample a grid_size×grid_size module matrix from a warped binary image
-    using an integral-image box mean around each module center."""
+    """Sample module matrix from a warped binary image using integral-image box means."""
     import numpy as np
     mod = side / grid_size
     centers = ((np.arange(grid_size) + 0.5) * mod).astype(np.int64)
     centers = np.clip(centers, 0, side - 1)
     half = max(1, int(mod * 0.3))
 
-    # Integral image with a zero-padded top/left so box sums are O(1).
+    # integral image (zero-padded) for O(1) box sums
     integral = np.pad(
         np.cumsum(np.cumsum(binary.astype(np.int32), axis=0), axis=1),
         ((1, 0), (1, 0)),
@@ -996,19 +950,11 @@ def _sample_matrix_vec(binary, side, grid_size):
 
 
 def _read_qr_image_cv2(img):
-    """Robust image → matrix pipeline for phone photos.
-
-    Pipeline: cv2.QRCodeDetector locates the four QR corners → perspective
-    unwarp to a fixed canonical square → adaptive thresholding → brute-force
-    over (binarization × version × rotation), scoring each candidate matrix
-    by how well its corners match the canonical finder pattern.
-
-    Returns (matrix, version) or (None, None) if cv2 is unavailable or
-    detection fails.
+    """cv2-based image->matrix pipeline: detect corners, perspective unwarp,
+    adaptive threshold, brute-force version/rotation by finder score.
+    Returns (matrix, version) or (None, None).
     """
-    # Broad except: on servers (e.g. Streamlit Community Cloud) the regular
-    # opencv-python wheel fails to import with OSError on missing libGL —
-    # we want to cleanly fall back to the naive reader rather than crash.
+    # broad except: opencv can fail with OSError on headless servers (missing libGL)
     try:
         import cv2
         import numpy as np
@@ -1022,19 +968,17 @@ def _read_qr_image_cv2(img):
     if gray.dtype != np.uint8:
         gray = gray.astype(np.uint8)
 
-    # Try detection on a few preprocessed variants. Phone photos can be
-    # low-contrast, low-resolution, or have shadows; CLAHE + upscaling +
-    # downscaling + sharpening noticeably improves cv2's detect() success rate.
+    # preprocess variants to improve detect() on low-quality phone photos
     candidates = []
     h, w = gray.shape
     
-    # Upscale tiny images
+    # upscale tiny images
     if max(h, w) < 600:
         scale = 600.0 / max(h, w)
         candidates.append(
             cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         )
-    # Downscale massive phone camera images (12+ Megapixels break corner detectors)
+    # downscale massive images (12+ MP breaks corner detectors)
     elif max(h, w) > 1200:
         scale = 1200.0 / max(h, w)
         candidates.append(
@@ -1047,7 +991,7 @@ def _read_qr_image_cv2(img):
         
     candidates.append(gray)
     
-    # Gaussian Blur rescues phone photos with heavy ISO grain in low light
+    # blur helps with heavy ISO grain
     try:
         candidates.append(cv2.GaussianBlur(gray, (5, 5), 0))
     except Exception:
@@ -1057,16 +1001,14 @@ def _read_qr_image_cv2(img):
         candidates.append(clahe.apply(gray))
     except Exception:
         pass
-    # A sharpened variant rescues some blurry / dense (high-version) QRs
-    # where the classical detector silently gives up.
+    # sharpening helps with blurry / dense QRs
     try:
         sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
         candidates.append(cv2.filter2D(gray, -1, sharpen_kernel))
     except Exception:
         pass
 
-    # Prefer the newer Aruco-based detector when available — it's much more
-    # tolerant of rotation, blur, and dense QRs than the classical one.
+    # prefer Aruco detector when available (more tolerant of rotation/blur)
     detectors = []
     if hasattr(cv2, "QRCodeDetectorAruco"):
         try:
@@ -1096,9 +1038,7 @@ def _read_qr_image_cv2(img):
     if pts.shape[0] != 4:
         return None, None
 
-    # Sort the four corners as TL, TR, BR, BL using the standard sum/diff trick.
-    # Even if the QR is rotated, this gives a consistent permutation; the
-    # subsequent 4-rotation search picks the right orientation.
+    # sort corners as TL/TR/BR/BL via sum/diff trick; rotation search fixes orientation
     s = pts.sum(axis=1)
     d = pts[:, 0] - pts[:, 1]
     tl = pts[np.argmin(s)]
@@ -1117,13 +1057,9 @@ def _read_qr_image_cv2(img):
         used, H, (SIDE, SIDE), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE
     )
 
-    # Try several binarizations — phone photos sometimes need adaptive
-    # thresholding for shadows, sometimes Otsu for clean lighting.
-    #
-    # IMPORTANT: adaptive blockSize must cover several QR modules. If it's
-    # only ~1 module wide, the local mean equals the module brightness and
-    # the threshold degenerates into an edge detector. SIDE=600 with V3
-    # gives mod≈20px, so blockSize must be ≥ ~60. Try several sizes.
+    # try several binarizations (Otsu + adaptive with varying block sizes).
+    # adaptive blockSize must span several modules or it degenerates into
+    # an edge detector (SIDE=600, V3 => mod~20px, so blockSize >= ~60).
     binarizations = []
     _, otsu = cv2.threshold(
         warped, 0, 1, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU
@@ -1142,8 +1078,7 @@ def _read_qr_image_cv2(img):
         for v in range(1, 41):
             grid_size = 17 + 4 * v
             mod = SIDE / grid_size
-            if mod < 3:
-                # Need at least ~3 px per module for reliable sampling at SIDE=600.
+            if mod < 3:  # need ~3px/module minimum for reliable sampling
                 continue
             base = _sample_matrix_vec(binw, SIDE, grid_size)
             for k in range(4):
@@ -1152,39 +1087,32 @@ def _read_qr_image_cv2(img):
                 if sc > best_score:
                     best_score, best_matrix, best_v = sc, rot, v
 
-    # 147 max; require a strong finder match to avoid returning garbage.
+    # max score is 147; require strong match to avoid garbage
     if best_matrix is None or best_score < 120:
         return None, None
     return best_matrix, best_v
 
 
 def read_qr_image(img):
-    """
-    Read a QR code image and extract its binary module matrix.
-    Returns (matrix, version) or (None, None) on failure.
-
-    Tries the cv2-based pipeline first (handles rotation, perspective, and
-    uneven lighting — needed for phone photos). Falls back to a naive
-    axis-aligned reader if cv2 is unavailable or detection fails.
-    """
+    """Read a QR image -> (matrix, version). Tries cv2 pipeline first, then naive fallback."""
     import numpy as np
 
-    # Primary: cv2 detect → warp → adaptive threshold → finder-scored sampling.
+    # try cv2-based pipeline first
     cv_matrix, cv_version = _read_qr_image_cv2(img)
     if cv_matrix is not None:
         return cv_matrix, cv_version
 
-    # Fallback: original naive reader (assumes clean, axis-aligned image).
+    # fallback: naive reader (clean, axis-aligned images only)
     if img.mode != 'L':
         img = img.convert('L')
     arr = np.array(img)
     h, w = arr.shape
 
-    # Binarize with Otsu-like threshold
+    # simple threshold binarization
     thresh = (int(arr.min()) + int(arr.max())) // 2
     binary = (arr < thresh).astype(int)  # 1 = dark, 0 = light
 
-    # Find QR bounding box (crop quiet zone)
+    # find QR bounding box
     rows_any = np.any(binary == 1, axis=1)
     cols_any = np.any(binary == 1, axis=0)
     if not rows_any.any() or not cols_any.any():
@@ -1192,36 +1120,33 @@ def read_qr_image(img):
     r_min, r_max = np.where(rows_any)[0][[0, -1]]
     c_min, c_max = np.where(cols_any)[0][[0, -1]]
 
-    # Estimate module size from top-left finder pattern
-    # Scan horizontal line through finder center (~row r_min + 3.5 modules)
-    # The finder pattern has 1:1:3:1:1 black:white:black:white:black ratio
+    # estimate module size from top-left finder (1:1:3:1:1 ratio)
     module_size = _estimate_module_size(binary, r_min, c_min, r_max, c_max)
     if module_size is None or module_size < 2:
         return None, None
 
-    # Determine grid size
+
     qr_pixel_w = c_max - c_min + 1
     qr_pixel_h = r_max - r_min + 1
     grid_size = round(max(qr_pixel_w, qr_pixel_h) / module_size)
 
-    # Snap to valid QR sizes (V1=21, V2=25, ..., V40=177).
-    # Each version increases the grid by 4 modules.
+    # snap to valid QR sizes (V1=21 ... V40=177, step 4)
     version = max(1, min(40, round((grid_size - 17) / 4)))
     grid_size = 17 + 4 * version
 
-    # Refine module size with known grid
+    # refine module size now that we know the grid
     mod_w = qr_pixel_w / grid_size
     mod_h = qr_pixel_h / grid_size
     mod = (mod_w + mod_h) / 2
 
-    # Sample each module at its center
+    # sample each module at center
     matrix = [[0] * grid_size for _ in range(grid_size)]
     for r in range(grid_size):
         for c in range(grid_size):
-            # Center of module (r, c) in pixel coordinates
+
             py = r_min + int((r + 0.5) * mod)
             px = c_min + int((c + 0.5) * mod)
-            # Sample a small area around center for robustness
+
             py = min(py, h - 1)
             px = min(px, w - 1)
             half = max(1, int(mod * 0.2))
@@ -1237,9 +1162,7 @@ def _estimate_module_size(binary, r_min, c_min, r_max, c_max):
     """Estimate module size by analyzing the top-left finder pattern."""
     h, w = binary.shape
 
-    # Scan a horizontal line through the middle of the top-left finder
-    # The finder is 7 modules tall, centered at ~r_min + 3.5*mod
-    # Try multiple scan lines and pick the most consistent one
+    # scan horizontal lines through the finder, pick most consistent 1:1:3:1:1 match
     best_mod = None
     best_score = float('inf')
 
@@ -1250,7 +1173,7 @@ def _estimate_module_size(binary, r_min, c_min, r_max, c_max):
         if scan_row >= h:
             continue
 
-        # Get run-length encoding of this row
+        # run-length encode this row
         runs = []
         current = binary[scan_row, c_min]
         count = 0
@@ -1263,21 +1186,21 @@ def _estimate_module_size(binary, r_min, c_min, r_max, c_max):
                 count = 1
         runs.append((current, count))
 
-        # Look for 1:1:3:1:1 dark:light:dark:light:dark pattern at start
+
         if len(runs) < 5:
             continue
-        # First run should be dark (the finder outer edge)
+        # first run must be dark
         if runs[0][0] != 1:
             continue
 
-        # Check ratio: runs[0]:runs[1]:runs[2]:runs[3]:runs[4] ≈ 1:1:3:1:1
+        # check ratio against expected 1:1:3:1:1
         widths = [runs[i][1] for i in range(5)]
         total = sum(widths)
         mod_est = total / 7.0
         if mod_est < 2:
             continue
 
-        # Check ratios
+
         expected = [1, 1, 3, 1, 1]
         score = sum(abs(widths[i] / mod_est - expected[i]) for i in range(5))
         if score < best_score:
@@ -1288,42 +1211,39 @@ def _estimate_module_size(binary, r_min, c_min, r_max, c_max):
 
 
 def read_qr_format_info(matrix):
-    """
-    Read format information from a QR matrix.
-    Returns (ecc_level, mask_idx) or (None, None) on failure.
-    """
+    """Read format info from a QR matrix. Returns (ecc_level, mask_idx)."""
     SIZE = len(matrix)
 
-    # Read format bits from around top-left finder (positions defined by QR spec)
+    # format bit positions around top-left finder (per QR spec)
     fmt_pos = [
         (8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 7), (8, 8),
         (7, 8), (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8)
     ]
 
-    # Read bits (MSB first, matching our write order)
+
     fbits = 0
     for i, (r, c) in enumerate(fmt_pos):
         if 0 <= r < SIZE and 0 <= c < SIZE:
             fbits = (fbits << 1) | matrix[r][c]
 
-    # Un-XOR the format mask
+
     raw = fbits ^ FORMAT_MASK_XOR
 
-    # Extract ECC level (bits 13-14) and mask (bits 10-12)
+
     ecc_code = (raw >> 13) & 0b11
     mask_idx = (raw >> 10) & 0b111
 
-    # Map ECC code to level name
+
     code_to_level = {v: k for k, v in ECC_INDICATOR.items()}
     ecc_level = code_to_level.get(ecc_code)
 
     if ecc_level is None:
         return None, None
 
-    # Validate: re-compute format bits and check against read
+    # validate by re-computing format bits
     expected = compute_format_bits(ecc_level, mask_idx)
     if expected != fbits:
-        # Try reading from the second copy (bottom-left + top-right)
+        # try second copy (bottom-left + top-right)
         fmt_pos_2 = [
             (SIZE-1, 8), (SIZE-2, 8), (SIZE-3, 8), (SIZE-4, 8),
             (SIZE-5, 8), (SIZE-6, 8), (SIZE-7, 8),
@@ -1342,7 +1262,7 @@ def read_qr_format_info(matrix):
         if ecc_level2 and compute_format_bits(ecc_level2, mask_idx2) == fbits2:
             return ecc_level2, mask_idx2
 
-        # If neither copy validates, try all 8 masks × 4 levels (brute force)
+        # brute force all 8 masks x 4 levels
         for lev in ['low', 'medium', 'quartile', 'high']:
             for mi in range(8):
                 if compute_format_bits(lev, mi) == fbits:
@@ -1350,17 +1270,14 @@ def read_qr_format_info(matrix):
                 if compute_format_bits(lev, mi) == fbits2:
                     return lev, mi
 
-        # Last resort: return what we decoded even without validation
+        # last resort: return unvalidated result
         return ecc_level, mask_idx
 
     return ecc_level, mask_idx
 
 
 def decode_raw_matrix(matrix, version=None):
-    """
-    Decode pipeline starting directly from a binary matrix (0=white, 1=black).
-    Used by the JS hybrid scanner.
-    """
+    """Decode pipeline: binary matrix -> format info -> codewords -> BM/Wu decode."""
     if version is None:
         version = max(1, min(40, round((len(matrix) - 17) / 4)))
 
@@ -1373,7 +1290,7 @@ def decode_raw_matrix(matrix, version=None):
         'error': None,
     }
 
-    # Step 2: Read format info
+    # read format info
     ecc_level, mask_idx = read_qr_format_info(matrix)
     if ecc_level is None:
         result['error'] = f"Could not read format information (V{version})"
@@ -1381,7 +1298,7 @@ def decode_raw_matrix(matrix, version=None):
     result['level'] = ecc_level
     result['mask'] = mask_idx
 
-    # Step 3: Look up the version+level layout
+    # look up version+level layout
     cfg = qr_config(version, ecc_level)
     if cfg is None:
         result['error'] = f"V{version}-{ecc_level} is not a known QR config"
@@ -1393,11 +1310,11 @@ def decode_raw_matrix(matrix, version=None):
     result['n'] = n; result['k'] = k; result['ecc_w'] = ecc_w
     result['nb'] = nb
 
-    # Step 4: Extract codewords
+    # extract codewords
     codewords = extract_qr_data(matrix, mask_idx=mask_idx, version=version, ecc_level=ecc_level)
     result['codewords'] = codewords
 
-    # Step 5: Per-block syndromes (sum across all blocks for the summary).
+    # per-block syndromes
     block_pairs = W.qr_de_interleave(codewords, version, ecc_level)
     all_syns = []
     nz_total = 0
@@ -1410,8 +1327,7 @@ def decode_raw_matrix(matrix, version=None):
     result['n_errors'] = nz_total
 
 
-    # Conservative display bound across all block groups. Mixed QR layouts
-    # can have different Wu radii because group 2 carries one more data byte.
+    # conservative bound across block groups (group 2 may have different Wu radius)
     block_bounds = W.qr_block_bounds(version, ecc_level)
     bound_groups = W.qr_block_bound_groups(version, ecc_level)
     worst_bound = W.qr_worst_block_bounds(version, ecc_level)
@@ -1423,7 +1339,7 @@ def decode_raw_matrix(matrix, version=None):
     result['bound_groups'] = bound_groups
 
     if nz_total == 0:
-        # All blocks clean — concatenate user data and decode text
+        # all blocks clean, no correction needed
         user_data = []
         for bd, _ in block_pairs:
             user_data.extend(bd)
@@ -1435,7 +1351,7 @@ def decode_raw_matrix(matrix, version=None):
         result['wu_success'] = True
         return result
 
-    # Step 6 & 7: Per-block BM + Wu decode
+    # per-block BM + Wu decode
     bm_data_blocks = []
     wu_data_blocks = []
     bm_all_ok = True
@@ -1444,7 +1360,7 @@ def decode_raw_matrix(matrix, version=None):
     for (bd, be), block_bound in zip(block_pairs, block_bounds):
         block_cw = list(bd) + list(be)
         n_blk = len(block_cw); k_blk = len(bd); ecc_blk = len(be)
-        # BM unique decode
+        # Berlekamp-Massey decode
         cw_int = W.qr_to_internal(block_cw)
         syns_int = W.rs_syndromes(n_blk, k_blk, cw_int)
         Lam, _ = W.berlekamp_massey(syns_int)
@@ -1468,7 +1384,7 @@ def decode_raw_matrix(matrix, version=None):
         else:
             bm_data_blocks.append(bm_decoded)
 
-        # Wu list decode — try up to t_max, keep the result with most candidates
+        # Wu list decode: try up to t_max, keep result with most candidates
         block_cands = []
         for t_try in range(1, block_bound['t_max'] + 1):
             cands = W.qr_wu_decode(block_cw, k_blk, ecc_blk, t_target=t_try)
@@ -1507,24 +1423,21 @@ def decode_raw_matrix(matrix, version=None):
         result['success'] = True
         result['t_used'] = max_t_used
 
-        # Re-encode all candidates and build recovered matrices
+        # re-encode candidates and build recovered matrices
         result['recovered_matrices'] = []
         for cand_data in wu_cands_list:
             rec_cw = W.qr_rs_encode_full(cand_data, version, ecc_level)
             rec_qr = make_qr_matrix(rec_cw, mask_idx=mask_idx, version=version, ecc_level=ecc_level)
             result['recovered_matrices'].append(rec_qr)
         
-        # Keep actual_errors logic based on the first candidate for simplicity
+        # actual_errors based on first candidate
         rec_cw_0 = W.qr_rs_encode_full(wu_cands_list[0], version, ecc_level)
         result['actual_errors'] = sum(1 for a, b in zip(rec_cw_0, codewords) if a != b)
     return result
 
 def decode_qr_image(img):
-    """
-    Full pipeline: image → matrix → format info → codewords → BM/Wu decode.
-    Returns a dict with all results.
-    """
-    # Step 1: Read image to matrix
+    """Full pipeline: image -> matrix -> format info -> codewords -> BM/Wu decode."""
+
     matrix, version = read_qr_image(img)
     if matrix is None:
         return {
@@ -1538,14 +1451,12 @@ def decode_qr_image(img):
 
     return decode_raw_matrix(matrix, version)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Standalone Demo
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Standalone Demo ---
 
 def main():
     random.seed(42)
 
-    # Demo: V2-High gives the biggest Wu advantage (+4 beyond BM)
+    # V2-High gives the biggest Wu advantage (+4 beyond BM)
     version = 2
     level = 'high'
     cfg = qr_config(version, level)
@@ -1565,7 +1476,7 @@ def main():
     print(f"  RS({n}, {k}), d={d}, BM={t0}, Wu={t_max}")
     print(f"  Injecting {t_errors} errors ({t_errors - t0} beyond BM)\n")
 
-    # Encode
+
     data_bytes = qr_encode_text(message, data_words=k)
     ecc_bytes = W.qr_rs_encode(data_bytes, ecc_w)
     codeword = data_bytes + ecc_bytes
@@ -1575,14 +1486,14 @@ def main():
     assert extracted == codeword, f"Round-trip failed!"
     print(f"  Encoded OK, mask {mask_used}, round-trip ✓")
 
-    # Corrupt
+
     err_pos = sorted(random.sample(range(n), t_errors))
     corrupted_cw = codeword[:]
     for i in err_pos:
         corrupted_cw[i] ^= random.randrange(1, 256)
     qr_corrupt = make_qr_matrix(corrupted_cw, mask_idx=mask_used, version=version, ecc_level=level)
 
-    # Decode
+
     cands = W.qr_wu_decode(corrupted_cw, k, ecc_w, t_target=t_errors)
     if cands and cands[0] == data_bytes:
         txt = qr_decode_text(cands[0])
@@ -1594,7 +1505,7 @@ def main():
         qr_recovered = qr_corrupt
         print(f"  Decoding failed")
 
-    # Save images
+
     out_dir = os.path.dirname(os.path.abspath(__file__))
     render_qr(qr_orig, scale=15).save(os.path.join(out_dir, 'qr_1_original.png'))
     render_qr(qr_corrupt, scale=15, fg=(180,40,40), bg=(255,230,230)).save(

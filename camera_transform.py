@@ -9,7 +9,7 @@ def apply_3d_rotation(pil_img, pitch=0, yaw=0, roll=0):
     img = np.array(pil_img.convert('RGB'))
     h, w = img.shape[:2]
     
-    pad = int(max(w, h) * 1.5) # Huge padding to prevent clipping
+    pad = int(max(w, h) * 1.5)  # generous padding to prevent clipping
     img_padded = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=[255, 255, 255])
     hp, wp = img_padded.shape[:2]
     
@@ -24,14 +24,14 @@ def apply_3d_rotation(pil_img, pitch=0, yaw=0, roll=0):
     Rz = np.array([[np.cos(rz), -np.sin(rz), 0, 0], [np.sin(rz), np.cos(rz), 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
     R = Rx.dot(Ry).dot(Rz)
     
-    f = max(w, h) # Base focal length on the original unpadded size!
-    d = 2.5 * f # Push the camera significantly further back to prevent the image from scaling out of bounds
+    f = max(w, h)  # focal length based on original (unpadded) size
+    d = 2.5 * f  # push camera back so the image doesn't scale out of bounds
     
     T1 = np.array([[1,0,0,-cx], [0,1,0,-cy], [0,0,1,0], [0,0,0,1]])
-    # Do not add cx, cy back in T2 because the camera matrix P handles the 2D centering!
+    # don't re-add cx,cy here — the camera matrix P handles 2D centering
     T2 = np.array([[1,0,0,0], [0,1,0,0], [0,0,1,d], [0,0,0,1]])
     
-    # By using 'd' as the projection focal length, scale remains 1x when Z=0
+    # using d as focal length keeps scale at 1x when Z=0
     P = np.array([[d, 0, cx, 0], [0, d, cy, 0], [0, 0, 1, 0]])
                   
     corners = np.array([[0,0,0,1], [wp,0,0,1], [wp,hp,0,1], [0,hp,0,1]]).T
@@ -77,7 +77,7 @@ def apply_bend(pil_img, amount=0):
         R = (w/2) / np.sin(abs(theta_max))
         apparent_x = x - w/2
         
-        # Avoid warnings with clip
+        # clamp to [-1, 1] to avoid arcsin domain warnings
         theta = np.arcsin(np.clip(apparent_x / R, -1.0, 1.0))
         if amount < 0: theta = -theta
         
@@ -91,7 +91,7 @@ def apply_bend(pil_img, amount=0):
 
     warped = cv2.remap(img_padded, map_x.astype(np.float32), map_y.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=[255,255,255])
     
-    # Auto-crop white borders
+    # auto-crop white borders
     gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
     _, thresh = cv2.threshold(gray, 254, 255, cv2.THRESH_BINARY_INV)
     coords = cv2.findNonZero(thresh)

@@ -16,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Global CSS ──────────────────────────────────────────────────────
+# --- Global CSS ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -497,7 +497,7 @@ section[data-testid="stFileUploader"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Hero header ─────────────────────────────────────────────────────
+# --- Hero header ---
 st.markdown("""
 <div class="hero-header">
     <div class="hero-title">List Decoding of QR codes</div>
@@ -518,7 +518,7 @@ st.markdown("""
 def render_capacity_meter(current_errs, t0_total, t_max_total, n_total,
                           nb=1, worst_block=None, t0_blk=None, t_max_blk=None,
                           label=None):
-    """Render the decoder-capability meter on the **total-error** scale."""
+    """Render the decoder-capability meter."""
     total = max(n_total, t_max_total + 1, 1)
     g_pct = max(0.0, (t0_total / total) * 100)
     y_pct = max(0.0, ((t_max_total - t0_total) / total) * 100)
@@ -605,9 +605,7 @@ def has_mixed_bounds(bound_groups):
 
 tab1, tab2, tab_live, tab4 = st.tabs(["🎛️ Generate & Corrupt", "📤 Upload & Decode", "📷 Live Scanner", "🔀 Ambiguous Channel"])
 
-# ═══════════════════════════════════════════════════════════════════
-#  TAB 1: Generate & Corrupt
-# ═══════════════════════════════════════════════════════════════════
+# --- Tab 1: Generate & Corrupt ---
 
 with tab1:
     configs = Q.all_configs()
@@ -664,7 +662,7 @@ with tab1:
         with c_w:
             wavy = st.slider("Wavy Bend", min_value=-200, max_value=200, value=0, format="%d%%", key="t1_wavy")
 
-    # ── Error slider ────────────────────────────────────────────────
+    # --- Error slider ---
     st.markdown('<div class="section-label">Error Injection</div>', unsafe_allow_html=True)
 
     if 't1_err' in st.session_state:
@@ -700,13 +698,13 @@ with tab1:
                   use_container_width=True,
                   disabled=(st.session_state.get('t1_err', 0) >= n))
 
-    # Encode
+
     random.seed(hash(message) & 0xFFFFFFFF)
     data_bytes = Q.qr_encode_text(message, data_words=k, version=ver)
     codeword = W.qr_rs_encode_full(data_bytes, ver, level)
     qr_orig, mask_used = Q.get_best_qr_matrix(codeword, version=ver, ecc_level=level)
 
-    # Corrupt
+
     random.seed((hash(message) ^ (t_errors * 9973)) & 0xFFFFFFFF)
     err_pos = sorted(random.sample(range(n), t_errors)) if t_errors > 0 else []
     corrupted_cw = codeword[:]
@@ -716,7 +714,7 @@ with tab1:
         corrupted_cw[i] ^= delta
     qr_corrupt = Q.make_qr_matrix(corrupted_cw, mask_idx=mask_used, version=ver, ecc_level=level)
 
-    # Per-block error counts
+
     block_pairs_orig = W.qr_de_interleave(codeword, ver, level)
     block_pairs_corr = W.qr_de_interleave(corrupted_cw, ver, level)
     per_block_errs = []
@@ -734,7 +732,7 @@ with tab1:
         if nb > 1 and block_bounds else worst_block_errs <= t_max
     )
 
-    # Decode both
+
     bm_ok = wu_ok = False
     bm_text = wu_text = None
     qr_recovered = None
@@ -745,7 +743,7 @@ with tab1:
         bm_text = wu_text = message
         qr_recovered = qr_orig
     else:
-        # BM unique decode per block
+
         bm_blocks = []
         bm_all = True
         for bd, be in block_pairs_corr:
@@ -772,14 +770,14 @@ with tab1:
                 bm_ok = True
                 bm_text = Q.qr_decode_text(bm_decoded, version=ver)
 
-        # Wu list decode per block
+
         wu_cands = W.qr_wu_decode_full(corrupted_cw, ver, level)
         if wu_cands:
             wu_ok = True
 
     if qr_recovered is None: qr_recovered = qr_corrupt
 
-    # Render images
+
     img_orig = Q.render_qr(qr_orig, scale=15)
     img_corrupt = Q.render_qr(qr_corrupt, scale=15)
     
@@ -795,7 +793,7 @@ with tab1:
             img_orig = CT.apply_3d_rotation(img_orig, pitch, yaw, roll)
             img_corrupt = CT.apply_3d_rotation(img_corrupt, pitch, yaw, roll)
 
-    # ── Capacity meter ──────────────────────────────────────────────
+    # --- Capacity meter ---
     st.markdown('<div class="section-label">Decoder Capacity</div>', unsafe_allow_html=True)
 
     blk_label = None
@@ -832,10 +830,10 @@ with tab1:
             f"blocks."
         )
 
-    # ── Three QR codes ──────────────────────────────────────────────
+    # --- QR codes display ---
     st.markdown('<div class="section-label">QR Codes</div>', unsafe_allow_html=True)
 
-    # Candidate selector (before columns so layout stays aligned)
+
     display_idx = 0
     if wu_ok and wu_cands:
         label_text = f"🔀 {len(wu_cands)} candidate{'s' if len(wu_cands) > 1 else ''} found — select to view:"
@@ -887,7 +885,7 @@ with tab1:
             st.image(img_corrupt, use_container_width=True)
             st.error("❌ Recovery failed — showing corrupted image.")
 
-    # ── Decoder comparison ──────────────────────────────────────────
+    # --- Decoder comparison ---
     st.markdown('<div class="section-label">Decoder Comparison</div>', unsafe_allow_html=True)
     if nb > 1:
         st.caption(f"Multi-block layout: **{nb} blocks** · {t_errors} total errors "
@@ -978,7 +976,7 @@ with tab1:
             viz_scale = 3
 
         with st.spinner("Generating block layout..."):
-            # Use fixed large scale for readability of text labels
+
             viz_scale = max(20, 800 // (17 + 4 * ver))
             anatomy_img, anatomy_info = Q.render_qr_blocks(qr_orig, ver, level, scale=viz_scale, mask_idx=mask_used)
 
@@ -993,7 +991,7 @@ with tab1:
         with info_col:
             st.markdown('<div class="section-label">Legend</div>', unsafe_allow_html=True)
             
-            # Show function patterns explanation
+
             st.markdown("""
             <div style="font-size:0.85rem; color:#cbd5e1; margin-bottom:12px;">
                 <strong>Function Patterns</strong> are drawn as standard black & white modules, but each module is marked with a letter to differentiate its role:
@@ -1011,7 +1009,7 @@ with tab1:
             nb_blocks = len(blocks)
             block_bounds = W.qr_block_bounds(ver, level)
             
-            # Recreate the shades of gray used in qr_demo.py render_qr_blocks
+            # gray shades matching qr_demo.py render_qr_blocks
             BLOCK_COLORS = [
                 "#bebebe", # 190
                 "#969696", # 150
@@ -1023,7 +1021,7 @@ with tab1:
                 "#8c8c8c", # 140
             ]
             
-            # Show Block shading legend
+
             legend_html = ""
             for i, (dk, ecc) in enumerate(blocks):
                 d_start = sum(b[0] for b in blocks[:i]) + 1
@@ -1106,9 +1104,7 @@ with tab1:
         """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  TAB 2: Upload & Decode
-# ═══════════════════════════════════════════════════════════════════
+# --- Tab 2: Upload & Decode ---
 
 def render_decoding_results(img_up, matrix_up, version_up):
         if img_up is not None or matrix_up is not None:
@@ -1121,7 +1117,7 @@ def render_decoding_results(img_up, matrix_up, version_up):
                 else:
                     _lbl = "📷 Scanned (Raw Matrix)"
                     st.markdown(f"**{_lbl}**")
-                    # Render the raw boolean matrix back to an image
+
                     st.image(Q.render_qr(matrix_up, scale=4), use_container_width=True)
 
             with st.spinner("Reading QR → syndromes → BM → Wu..."):
@@ -1223,9 +1219,7 @@ def render_decoding_results(img_up, matrix_up, version_up):
                             st.image(Q.render_qr(matrix, scale=15, fg=(0,100,0), bg=(230,255,230)), use_container_width=True)
 
 
-    # ═══════════════════════════════════════════════════════════════════
-    #  TAB 3: Ambiguous Channel
-    # ═══════════════════════════════════════════════════════════════════
+    # --- Tab 3: Ambiguous Channel ---
 
 
 with tab2:
@@ -1261,7 +1255,7 @@ with tab_live:
 
     st.write("")
 
-    # Initialize session state for the live scanner
+
     if "live_decoded" not in st.session_state:
         st.session_state.live_decoded = False
     if "live_result" not in st.session_state:
@@ -1271,7 +1265,7 @@ with tab_live:
     if "live_version" not in st.session_state:
         st.session_state.live_version = None
 
-    # Show the scanner component only if we haven't decoded yet
+
     if not st.session_state.live_decoded:
         scanner_html = os.path.join(os.path.dirname(__file__), "scanner_component")
         scanner = components.declare_component("hybrid_scanner", path=scanner_html)
@@ -1281,20 +1275,20 @@ with tab_live:
             matrix_up = val['matrix']
             version_up = int(val['size'] - 17) // 4
 
-            # Try to decode the matrix
+
             result = Q.decode_raw_matrix(matrix_up, version_up)
 
             is_success = (result.get('bm_success') or result.get('wu_success')) and result.get('error') is None
 
             if is_success:
-                # Save the result and stop the camera
+
                 st.session_state.live_decoded = True
                 st.session_state.live_result = result
                 st.session_state.live_matrix = matrix_up
                 st.session_state.live_version = version_up
                 st.rerun()
     else:
-        # We have a decoded result — show the "Scan Another" button and results
+
         st.success("✅ QR Code successfully decoded!")
         if st.button("🔄 Scan Another QR Code"):
             st.session_state.live_decoded = False
@@ -1308,7 +1302,7 @@ with tab_live:
         version_up = st.session_state.live_version
 
         if result and not result.get('error'):
-            # Show the scanned QR image
+
             uc1, uc2, uc3 = st.columns(3)
             with uc1:
                 st.markdown("**📷 Scanned (Raw Matrix)**")
@@ -1401,8 +1395,7 @@ with tab4:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Interactive Decoding-Spheres SVG Diagram ──
-    # Streamlit sanitises inline SVG, so we embed via a base64 data-URI <img>.
+    # streamlit sanitises inline SVG, so embed via base64 data-URI
     _sphere_svg = '''\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 280" width="560" height="280">
   <style>
@@ -1509,7 +1502,7 @@ with tab4:
         unsafe_allow_html=True
     )
 
-    # ── Step-by-step flow ──
+
     st.markdown('<div class="section-label">How It Works</div>', unsafe_allow_html=True)
     st.markdown("""
     <div class="step-flow">
@@ -1547,7 +1540,7 @@ with tab4:
             "placing R at distance **9** from both — well within Wu's correction radius of **11**."
         )
 
-    # ── Live Demo Inputs ──
+    # --- Live demo inputs ---
     hd1, hd2 = st.columns([2, 1], vertical_alignment="bottom")
     with hd1:
         st.markdown('<div class="section-label" style="margin-bottom:0;">Live Demo</div>', unsafe_allow_html=True)
@@ -1559,7 +1552,7 @@ with tab4:
             st.session_state.t3_total_errs = 13
             st.rerun()
     
-    # Add config selector to Tab 3
+
     def _label_t3(c):
         bg = c.get('bound_groups', [])
         if len(bg) > 1 and has_mixed_bounds(bg):
@@ -1588,7 +1581,7 @@ with tab4:
         msg2 = st.text_input("Message 2 (change 1 char)", value="Nessage"[:max_ch], max_chars=max_ch, key="t3_m2",
                               help="Slightly altered message — try changing just one letter")
                               
-    # Pre-calculate base distance per block to dynamically update the slider
+    # base distance per block for slider bounds
     total_data_words = sum(b[0] for b in W.qr_block_layout(ver, level))
     d1_pre = Q.qr_encode_text(msg1, data_words=total_data_words, version=ver)
     d2_pre = Q.qr_encode_text(msg2, data_words=total_data_words, version=ver)
@@ -1656,7 +1649,7 @@ with tab4:
                 rec = cb1[:]
                 for i in diff[half:]: rec[i] = cb2[i]
                 
-                # Inject extra symmetrical errors into shared bytes
+                # inject extra errors into shared (non-differing) bytes
                 if extra_errs > 0:
                     import random
                     shared = [i for i in range(len(cb1)) if cb1[i] == cb2[i]]
@@ -1665,13 +1658,13 @@ with tab4:
                         rec[idx] = (cb1[idx] + random.randint(1, 255)) % 256
                 rec_blocks.append(rec)
                 
-                # Decode per block for visual breakdown
+
                 k_blk = len(d1b)
                 ecc_blk = len(e1b)
                 bcands = W.qr_wu_decode(rec, k_blk, ecc_blk, t_target=st.session_state.t3_total_errs)
                 block_cands.append(bcands)
                 
-            # Interleave rec_blocks
+
             max_dk = max(len(d) for d, e in b1_pairs)
             ecc_count = len(b1_pairs[0][1])
             rec_full = []
@@ -1692,7 +1685,7 @@ with tab4:
                     full_data.extend(bd)
                 full_cands.append(full_data)
 
-            # UI Breakdown
+
             st.markdown('<div class="section-label">Block-by-Block Decoder Output</div>', unsafe_allow_html=True)
             for i, bcands in enumerate(block_cands):
                 num_cands = len(bcands) if bcands else 0
@@ -1712,7 +1705,7 @@ with tab4:
             else:
                 st.error("Decoding failed.")
 
-            # Render QR codes and Candidate cards for the final list
+
             _, msk_rec = Q.get_best_qr_matrix(rec_full, version=ver, ecc_level=level)
             qr_rec = Q.make_qr_matrix(rec_full, mask_idx=msk_rec, version=ver, ecc_level=level)
             img_rec = Q.render_qr(qr_rec, scale=15, fg=(150, 40, 40), bg=(255, 240, 240))
@@ -1756,7 +1749,7 @@ with tab4:
                         </div>
                         """, unsafe_allow_html=True)
 
-            # ── Takeaway section ──
+
             if total_size >= 2:
                 st.markdown('<div class="section-label">What This Means</div>', unsafe_allow_html=True)
                 st.markdown(f"""
@@ -1773,7 +1766,7 @@ with tab4:
                 </div>
                 """, unsafe_allow_html=True)
 
-# ── Footer ──────────────────────────────────────────────────────────
+# --- Footer ---
 st.markdown("""
 <div class="app-footer">
     <br>

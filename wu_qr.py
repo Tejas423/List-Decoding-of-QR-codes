@@ -1,32 +1,23 @@
 #!/usr/bin/env python3
 """
-wu_list_decode_gf256.py
+Wu's list decoder for Reed-Solomon codes over GF(2^8).
+Uses QR-code-style generator-polynomial encoding.
 
-Wu's rational curve-fitting list decoder for Reed-Solomon codes
-over GF(2^8), using QR-code-style generator-polynomial encoding.
-
-Reference:
-  "New List Decoding Algorithms for Reed-Solomon and BCH Codes"
-  Yingquan Wu, ISIT 2007.
-
-Run:  python wu_list_decode_gf256.py
+Ref: Wu, "New List Decoding Algorithms for RS and BCH Codes", ISIT 2007.
 """
 
 import random, math, numpy as np
 import itertools
 
-# ── C++ backend (optional, ~25-50x faster for hot-path ops) ───────────────────
+# optional C++ backend (~25-50x faster for hot-path ops)
 try:
     import wu_core as _cpp
     _HAS_CPP = True
 except ImportError:
     _HAS_CPP = False
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  GF(2^8) Arithmetic  —  same field as QR codes
-#  Primitive polynomial: x^8 + x^4 + x^3 + x^2 + 1  (0x11D)
-#  Primitive element:    α = 2  (α^255 = 1)
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- GF(2^8) Arithmetic ---
+# Primitive poly: x^8 + x^4 + x^3 + x^2 + 1 (0x11D), primitive element α = 2
 
 PRIM_POLY = 0x11D
 GF = 256
@@ -45,11 +36,11 @@ for _i in range(255):
 for _i in range(255, 512):
     _exp[_i] = _exp[_i - 255]
 
-# NumPy lookup tables for vectorized GF(2^8) operations
+# numpy lookup tables for vectorized GF ops
 EXP_NP = np.array(_exp[:512], dtype=np.int32)
 LOG_NP = np.array(_log[:256], dtype=np.int32)
 
-# Precomputed alpha power tables (avoid repeated gf_pow calls)
+# precomputed alpha powers
 _alpha_pow = [1] * 256
 for _i in range(1, 256):
     _alpha_pow[_i] = _exp[_i % 255]
@@ -80,10 +71,8 @@ def gf_pow(a, n):
     if a == 0: return 0
     return _exp[(_log[a] * (n % 255)) % 255]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Polynomial ops over GF(2^8)
-#  Representation: [a0, a1, ..., an] = a0 + a1*x + ... + an*x^n
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Polynomial ops over GF(2^8) ---
+# Representation: [a0, a1, ..., an] = a0 + a1*x + ... + an*x^n
 
 def ps(c):
     c = list(c)
@@ -139,9 +128,7 @@ def pgcd(a, b):
     if a != [0]: a = pscalar(a, gf_inv(a[-1]))
     return a
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  RS Code — QR-code-style generator-polynomial encoding
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- RS Code (QR-style generator-polynomial encoding) ---
 
 _rs_gen_cache = {}
 
@@ -156,22 +143,18 @@ def rs_generator(nsym):
     return g
 
 def rs_encode(n, k, msg):
-    """
-    Systematic encoding:
-      c(x) = m(x)*x^{n-k} + (m(x)*x^{n-k} mod g(x))
-    Returns codeword [parity_0, ..., parity_{n-k-1}, msg_0, ..., msg_{k-1}].
-    """
+    """Systematic RS encoding. Returns [parity | message]."""
     nsym = n - k
     g = rs_generator(nsym)
-    # m(x) * x^{n-k}
+
     rem = [0] * nsym + list(msg[:k])
-    # Polynomial long division: process from highest degree to lowest
+    # polynomial long division
     for i in range(k - 1, -1, -1):
         coeff = rem[nsym + i]
         if coeff == 0: continue
         for j in range(nsym + 1):
             rem[i + j] ^= gf_mul(g[j], coeff)
-    # Codeword = remainder (parity) + message
+
     codeword = rem[:nsym] + list(msg[:k])
     return codeword
 
@@ -180,15 +163,10 @@ def rs_syndromes(n, k, received):
     nsym = n - k
     return [peval(received, _alpha_pow[j]) for j in range(nsym)]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Berlekamp-Massey over GF(2^8)
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Berlekamp-Massey over GF(2^8) ---
 
 def _py_berlekamp_massey(S):
-    """
-    BM on syndromes S = [S_0, S_1, ..., S_{N-1}].
-    Returns (Lambda, B) with L_Lambda + L_B = N.
-    """
+    """BM on syndromes. Returns (Lambda, B) with L_Lambda + L_B = N."""
     N = len(S); C = [1]; B = [1]; L = 0; dp = 1
     for r in range(N):
         delta = S[r]
@@ -220,9 +198,7 @@ def berlekamp_massey(S):
         return _cpp.berlekamp_massey(list(S))
     return _py_berlekamp_massey(S)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Nullspace over GF(2^8) via Gaussian elimination
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Nullspace over GF(2^8) (Gaussian elimination) ---
 
 def _py_nullspace(A):
     m = len(A)
@@ -236,13 +212,13 @@ def _py_nullspace(A):
         piv = row + nz[0]
         if piv != row:
             M[[row, piv]] = M[[piv, row]]
-        # Scale pivot row: M[row] *= gf_inv(M[row, col])
+        # scale pivot row
         iv = gf_inv(int(M[row, col]))
         pr = M[row].copy()
         nz_pr = pr != 0
         M[row] = 0
         M[row, nz_pr] = EXP_NP[LOG_NP[pr[nz_pr]] + LOG_NP[iv]]
-        # Eliminate all other rows with non-zero entry in this column
+        # eliminate column in other rows
         factors = M[:, col].copy()
         factors[row] = 0
         nz_rows = np.nonzero(factors)[0]
@@ -268,13 +244,10 @@ def nullspace(A):
         return _cpp.nullspace(A)
     return _py_nullspace(A)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Interpolation system — (1, w)-weighted, multiplicity m
-#  Binomial coefficients mod 2 via Lucas' theorem
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Interpolation system ---
 
 def binom2(n, k):
-    """C(n, k) mod 2.  By Lucas' theorem: 1 iff k is a submask of n in binary."""
+    """C(n,k) mod 2 via Lucas' theorem: 1 iff k is a submask of n."""
     if k < 0 or k > n: return 0
     return 1 if (k & n) == k else 0
 
@@ -294,7 +267,7 @@ def _py_build_interp(xs, ys, is_inf, m, mons, Ly):
     mj = max(j for _, j in mons)
     mon_i = np.array([i for i, _ in mons], dtype=np.int32)
     mon_j = np.array([j for _, j in mons], dtype=np.int32)
-    # Precompute binom2 masks (Lucas: C(n,k) mod 2 = 1 iff k is submask of n)
+    # precompute binom2 masks
     fin_masks = {}
     for a in range(m):
         for b in range(m - a):
@@ -356,25 +329,16 @@ def vec_to_Q(vec, mons, Ly):
         if j <= Ly: Q[j][i] ^= c
     return [ps(Qj) for Qj in Q]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Hensel Lifting (Newton-Raphson for power series)
-#
-#  Replaces RR's exponential tree search with quadratic convergence:
-#    - Find initial roots at depth 0: scan GF(256) once
-#    - For each root, DOUBLE precision each step: K terms in O(log K) steps
-#    - No branching after step 0
-#
-#  Complexity: O(#roots × K × log K × poly_ops)
-#  vs RR:     O(256^branching × K × deg_y)    ← can explode
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Hensel Lifting (Newton iteration for power series roots) ---
+# quadratic convergence: K terms in O(log K) steps, no branching after step 0
 
 def _ptrunc(a, m):
-    """Truncate polynomial to mod x^m (keep first m coefficients)."""
+    """Truncate poly mod x^m."""
     if m <= 0: return [0]
     return ps((a + [0] * m)[:m])
 
 def _pmul_mod(a, b, m):
-    """Multiply polynomials mod x^m (numpy-vectorized inner loop)."""
+    """Multiply polys mod x^m (numpy-vectorized)."""
     if a == [0] or b == [0]: return [0]
     b_arr = np.array(b, dtype=np.int32)
     b_nz = b_arr != 0
@@ -391,11 +355,7 @@ def _pmul_mod(a, b, m):
     return ps(out.tolist())
 
 def _pinv_mod(f, m):
-    """
-    Compute f(x)^{-1} mod x^m using Newton iteration.
-    In char 2: g_{i+1} = f * g_i^2 mod x^{2^{i+1}}
-    Requires f(0) != 0.
-    """
+    """f(x)^{-1} mod x^m via Newton. In char 2: g_{i+1} = f*g_i^2. Requires f(0) != 0."""
     if f == [0] or f[0] == 0:
         return None  # not invertible
     g = [gf_inv(f[0])]  # g_0 = f(0)^{-1}, correct mod x^1
@@ -409,7 +369,7 @@ def _pinv_mod(f, m):
     return _ptrunc(g, m)
 
 def _Q_eval_series(Q, s, m):
-    """Evaluate Q(x, s(x)) mod x^m, where Q = [Q_0(x), Q_1(x), ..., Q_Ly(x)]."""
+    """Evaluate Q(x, s(x)) mod x^m."""
     result = _ptrunc(Q[0], m) if Q[0] != [0] else [0]
     s_pow = [1]  # s^0 = 1
     for j in range(1, len(Q)):
@@ -420,11 +380,7 @@ def _Q_eval_series(Q, s, m):
     return _ptrunc(result, m)
 
 def _Qy_eval_series(Q, s, m):
-    """
-    Evaluate dQ/dy(x, s(x)) mod x^m.
-    In char 2: dQ/dy = sum_{odd j} Q_j(x) * y^{j-1}
-    (even j terms vanish because j * coeff = 0 in char 2)
-    """
+    """dQ/dy(x, s(x)) mod x^m. In char 2 only odd-j terms survive."""
     result = [0]
     s_pow = [1]  # s^0
     for j in range(1, len(Q)):
@@ -437,23 +393,12 @@ def _Qy_eval_series(Q, s, m):
     return _ptrunc(result, m)
 
 def _py_hensel_series(Q, K, max_roots=64):
-    """
-    Find power series roots of Q(x, y) to precision K using Hensel lifting.
-    
-    Algorithm:
-      1. Find roots of Q(0, y) = 0 by scanning GF(256)
-      2. For each root y0, Newton-lift: s = y0 + ... to K terms
-         s_{new} = s + Q(x,s) * Q_y(x,s)^{-1} mod x^{2m}
-         (In char 2, subtraction = addition)
-      3. Verify Q(x, s) ≡ 0 mod x^K
-    
-    Returns list of K-length coefficient lists.
-    """
+    """Find power series roots of Q(x,y) to precision K via Hensel lifting."""
     Ly = len(Q) - 1
     if Ly < 0:
         return []
 
-    # Step 1: Find roots at x=0 (scan field once)
+    # roots at x=0
     P0 = [Qj[0] if Qj != [0] else 0 for Qj in Q]
     initial_roots = []
     for y in range(GF):
@@ -468,56 +413,52 @@ def _py_hensel_series(Q, K, max_roots=64):
 
     results = []
     for y0 in initial_roots:
-        # Step 2: Hensel lift from s = [y0] to K terms
-        s = [y0]  # known mod x^1
+        # lift from s = [y0] to K terms
+        s = [y0]
         prec = 1
 
         success = True
         while prec < K:
             new_prec = min(prec * 2, K)
 
-            # Evaluate Q(x, s) mod x^{new_prec}
+
             Qs = _Q_eval_series(Q, s, new_prec)
 
-            # Check if already zero
             if all(c == 0 for c in _ptrunc(Qs, new_prec)):
-                # Already a root to this precision, pad with zeros
+                # already a root to this precision
                 s = (s + [0] * new_prec)[:new_prec]
                 prec = new_prec
                 continue
 
-            # Evaluate Q_y(x, s) mod x^{new_prec}
+
             Qys = _Qy_eval_series(Q, s, new_prec)
 
-            # Need Q_y(x, s) to be invertible (non-zero constant term)
+            # Q_y must be invertible
             if Qys == [0] or Qys[0] == 0:
-                # Q_y vanishes — Hensel can't lift (multiple root)
-                # Fall back: pad with zeros (partial result)
                 success = False
                 break
 
-            # Compute Q_y^{-1} mod x^{new_prec}
+
             Qys_inv = _pinv_mod(Qys, new_prec)
             if Qys_inv is None:
                 success = False
                 break
 
-            # Newton step: s_new = s + Q(x,s) * Q_y(x,s)^{-1} mod x^{new_prec}
-            # (In char 2: + and - are the same)
+            # Newton step: s_new = s - Q/Q_y mod x^{new_prec}
             delta = _pmul_mod(Qs, Qys_inv, new_prec)
             s_new = padd((s + [0] * new_prec)[:new_prec], _ptrunc(delta, new_prec))
             s = _ptrunc(s_new, new_prec)
             prec = new_prec
 
-        # Pad to K terms
+
         s = (s + [0] * K)[:K]
 
-        # Step 3: Verify Q(x, s) ≡ 0 mod x^K
+        # verify Q(x,s) = 0 mod x^K
         Qs_final = _Q_eval_series(Q, s, K)
         if all(c == 0 for c in _ptrunc(Qs_final, K)):
             results.append(s)
 
-    # Dedup
+
     seen = set(); uniq = []
     for s in results:
         key = tuple(s)
@@ -537,7 +478,7 @@ def _py_rr_series(Q, K, max_br=256):
         Qc, pre, dep = stack.pop()
         if dep >= K: results.append(pre[:K]); continue
         P0 = [Qj[0] if Qj != [0] else 0 for Qj in Qc]
-        # Find roots of P0 as univariate poly over GF(256)
+        # roots of P0 over GF(256)
         roots = []
         for y in range(GF):
             val = 0; py = 1
@@ -554,7 +495,7 @@ def _py_rr_series(Q, K, max_br=256):
             stack.append((Qn, np2, dep + 1))
     seen = set(); uniq = []
     for s in results:
-        # Keep full K-length series — trailing zeros are meaningful for BM recovery
+        # keep full K-length series (trailing zeros matter for BM recovery)
         s = (s + [0] * K)[:K]
         key = tuple(s)
         if key not in seen: seen.add(key); uniq.append(s)
@@ -568,7 +509,7 @@ def rr_series(Q, K, max_br=256):
 def _Qshift(Q, c):
     """Q(x, c + x*y) / x^v"""
     Ly = len(Q) - 1
-    # Binomial and power tables (mod 2 for binomials)
+    # binomial and power tables (mod 2)
     pc = [1] * (Ly + 1)
     for e in range(1, Ly + 1): pc[e] = gf_mul(pc[e-1], c)
     S = []
@@ -598,9 +539,7 @@ def _Qshift(Q, c):
     if all(q == [0] for q in Qn): return None
     return Qn
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Parameter computation
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Parameter computation ---
 
 def wu_params(n, k, L_Lam, L_B, t=None):
     d = n - k + 1; t0 = d // 2; L_xB = L_B + 1; w = L_Lam - L_xB
@@ -611,7 +550,7 @@ def wu_params(n, k, L_Lam, L_B, t=None):
     m_start = max(m_start, 1)
     while (tm * m_start + tm - t0) ** 2 <= 2 * n * m_start * (m_start + 1) * (tm - t0):
         m_start += 1
-        if m_start > 500:  # safety cap: prevents infinite loop when gap <= 0
+        if m_start > 500:  # safety cap
             break
     Ly_den = 2 * (tm - t0)
     best = None
@@ -639,27 +578,25 @@ def wu_params(n, k, L_Lam, L_B, t=None):
     Ls = max(3 * tm - 2 * t0 - L_Lam, 4 * (tm - t0), 2)
     return dict(t=tm, t0=t0, m=m, Ly=Ly, LQ=LQ, w=w, Ls=Ls, L_xB=L_xB, ok=best is not None)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Chien search via register recurrence (replaces naive Horner evaluation)
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Chien search (register recurrence) ---
 
 def _py_chien_search(poly, n):
-    """Find positions i where poly(alpha^{-i}) = 0 using register recurrence."""
+    """Find positions i where poly(alpha^{-i}) = 0."""
     deg = pdeg(poly)
     if deg <= 0:
         return []
     coeffs = (poly + [0] * (deg + 1))[:deg + 1]
     regs = np.array(coeffs, dtype=np.int32)
     mults = np.array([_alpha_neg[j] for j in range(deg + 1)], dtype=np.int32)
-    # Precompute log of multipliers (all non-zero since alpha is primitive)
+
     mult_logs = LOG_NP[mults]
     err_pos = []
     for i in range(n):
-        # Evaluate: XOR all registers = poly(alpha^{-i})
+
         val = int(np.bitwise_xor.reduce(regs))
         if val == 0:
             err_pos.append(i)
-        # Update: regs[j] *= alpha^{-j} (vectorized)
+        # update registers: regs[j] *= alpha^{-j}
         nz = regs != 0
         new_regs = np.zeros_like(regs)
         new_regs[nz] = EXP_NP[LOG_NP[regs[nz]] + mult_logs[nz]]
@@ -671,14 +608,12 @@ def chien_search(poly, n):
         return _cpp.chien_search(list(poly), n)
     return _py_chien_search(poly, n)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Recovery: series → (lambda, b) → Lambda* → decode
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Recovery: series -> (lambda, b) -> Lambda* -> decode ---
 
 def recover_from_series(n, k, series, Lambda, B, L_Lam, L_xB, t, t0, received):
     xB = [0] + B; results = []
     pairs = []
-    # Method A: BM on subsequence
+    # BM on subsequence
     start = max(0, t - L_xB + 1); bm_len = 2 * (t - L_Lam)
     if bm_len > 0 and start + bm_len <= len(series):
         sub = series[start:start + bm_len]
@@ -686,12 +621,12 @@ def recover_from_series(n, k, series, Lambda, B, L_Lam, L_xB, t, t0, received):
         trunc = max(t - L_xB + 1, pdeg(lam) + 1)
         b2 = pmul(series[:trunc], lam); b2 = ps(b2[:trunc])
         pairs.append((lam, b2))
-    # Method B: BM on full
+    # BM on full series
     lam2, _ = berlekamp_massey(series)
     trunc2 = max(pdeg(lam2) + 1, 1)
     b3 = pmul(series[:trunc2], lam2); b3 = ps(b3[:trunc2])
     pairs.append((lam2, b3))
-    # Method C: Padé
+    # Pade approximation
     pairs.extend(pade_approx(series, max(t - L_xB, 1), max(t - L_Lam, 1)))
 
     for lam, b_poly in pairs:
@@ -700,7 +635,7 @@ def recover_from_series(n, k, series, Lambda, B, L_Lam, L_xB, t, t0, received):
         if Lstar == [0]: continue
         if Lstar[0] != 0:
             iv = gf_inv(Lstar[0]); Lstar = [gf_mul(c, iv) for c in Lstar]
-        # Chien search using register recurrence
+
         err_pos = chien_search(Lstar, n)
         if len(err_pos) != pdeg(Lstar) or len(err_pos) > t or len(err_pos) == 0:
             continue
@@ -735,15 +670,14 @@ def pade_approx(series, max_dl, max_db):
     return results
 
 def decode_from_positions(n, k, err_pos, received):
-    """Given error positions, solve for error values and decode."""
+    """Solve for error values at known positions and decode."""
     nsym = n - k; ne = len(err_pos)
     if ne == 0:
         syns = rs_syndromes(n, k, received)
         if all(s == 0 for s in syns): return extract_message(n, k, received)
         return None
     syns = rs_syndromes(n, k, received)
-    # Build syndrome matrix: S_j = sum e_l * X_l^j
-    # where X_l = alpha^{err_pos[l]}
+    # syndrome matrix
     Xlocs = [_alpha_pow[pos] for pos in err_pos]
     A = [[gf_pow(Xlocs[c], j) for c in range(ne)] for j in range(ne)]
     rhs = syns[:ne]
@@ -752,13 +686,13 @@ def decode_from_positions(n, k, err_pos, received):
     corrected = received[:]
     for idx, pos in enumerate(err_pos):
         corrected[pos] ^= ev[idx]
-    # Verify
+
     syn2 = rs_syndromes(n, k, corrected)
     if not all(s == 0 for s in syn2): return None
     return extract_message(n, k, corrected)
 
 def extract_message(n, k, codeword):
-    """Extract message from systematic codeword (last k symbols)."""
+    """Extract message (last k symbols of systematic codeword)."""
     return list(codeword[n - k:])
 
 def solve_linear(A, b):
@@ -780,9 +714,7 @@ def solve_linear(A, b):
                 for c in range(nc + 1): aug[r][c] ^= gf_mul(f, aug[col][c])
     return [aug[c][nc] for c in range(min(m, nc))]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  GS polynomial fallback
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- GS polynomial fallback ---
 
 def gs_poly_fallback(n, k, received, t):
     w = k - 1
@@ -808,7 +740,7 @@ def gs_poly_fallback(n, k, received, t):
     m_v, D, L = best_m, best_D, best_L
     mons = monomial_list(L, D, w)
     if not mons: return []
-    # Points: (alpha^i, r_i)
+
     xs = [_alpha_pow[i] for i in range(n)]
     ys = received[:]
     rows = build_interp(xs, ys, [False] * n, m_v, mons, L)
@@ -830,9 +762,7 @@ def gs_poly_fallback(n, k, received, t):
             if agree >= n - t: all_cands.append(f)
     return dedup(k, all_cands)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Main decoder
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Main decoder ---
 
 def _py_wu_decode(n, k, received, t_target=None, verbose=False):
     nsym = n - k
@@ -844,10 +774,9 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
     Lambda, B = berlekamp_massey(syns)
     L_Lam = pdeg(Lambda); L_B = pdeg(B); L_xB = L_B + 1
 
-    # BM unique decode (works when errors <= t0)
+    # BM unique decode
     msg_u = _try_unique(n, k, Lambda, received, syns)
 
-    # Early return: if BM succeeded and caller only wants unique decode, skip list decode
     if msg_u is not None and t_target is not None and t_target <= (n - k + 1) // 2:
         return [msg_u]
 
@@ -863,7 +792,7 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
             par = par2; t = par['t']; m = par['m']; Ly = par['Ly']
             LQ = par['LQ']; w = par['w']; Ls = par['Ls']
         else:
-            # Params infeasible — return BM result if available
+
             return [msg_u] if msg_u else []
 
     if L_Lam > t:
@@ -871,7 +800,7 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
     if L_xB > t:
         return [msg_u] if msg_u else []
 
-    # Rational points
+    # rational points
     xs, ys, isinf = [], [], []
     for i in range(n):
         xi = _alpha_neg[i]
@@ -908,10 +837,10 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
     for vi, vec in enumerate(Ns[:10]):
         Q = vec_to_Q(vec, mons, Ly)
 
-        # Primary: Hensel lifting (O(log K) steps, no branching)
+        # Hensel first, RR fallback
         slist = hensel_series(Q, K, max_roots=64)
         
-        # Fallback: RR if Hensel found nothing (handles multiple roots / char 2 edge cases)
+
         if not slist:
             slist = rr_series(Q, K, max_br=64)
 
@@ -919,7 +848,7 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
         for series in slist:
             cands = recover_from_series(n, k, series, Lambda, B, L_Lam, L_xB, t, t0, received)
             all_cands.extend(cands)
-        # Early exit: stop processing nullspace vectors once we have candidates
+
         if all_cands:
             break
 
@@ -952,9 +881,7 @@ def dedup(k, cands):
     return out
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  QR-Compatible RS Encoding  (identical to paulmillr/qr RS.encode)
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- QR-compatible RS encoding (matches paulmillr/qr) ---
 
 def qr_generator_poly(ecc_words):
     g = list(reversed(rs_generator(ecc_words)))
@@ -986,19 +913,10 @@ def qr_wu_decode(cw_qr, k, ecc_words, t_target=None):
     cands = wu_decode(n, k, qr_to_internal(cw_qr), t_target=t_target, verbose=False)
     return [internal_msg_to_qr(m) for m in cands] if cands else []
 
-# ─── Multi-block QR support ────────────────────────────────────────────────────
-# Higher QR versions split data into multiple RS blocks (possibly of two
-# different sizes — "group 1" and "group 2"), each encoded separately, then
-# interleaved at the byte level when placed in the QR matrix.
+# --- Multi-block QR support ---
 
 def qr_block_layout(version, level):
-    """
-    Returns list of (data_bytes, ecc_bytes) tuples for each block of the
-    given QR version + ECC level.
-
-    All blocks share the same number of ECC bytes per block. Data is split
-    so that "group 2" blocks (placed at the end) carry one extra data byte.
-    """
+    """Returns list of (data_bytes, ecc_bytes) for each block at given version+level."""
     idx = version - 1
     total = QR_TOTAL[idx]
     ecc_per_block = QR_ECC_WORDS[level][idx]
@@ -1037,13 +955,7 @@ def qr_block_bounds(version, level):
             for data_bytes, ecc_bytes in qr_block_layout(version, level)]
 
 def qr_worst_block_bounds(version, level):
-    """
-    Return the conservative per-block bound for a QR layout.
-
-    Mixed QR layouts have group-1 blocks with k data bytes and group-2 blocks
-    with k+1 data bytes. The Wu radius depends on each block's own n and k, so
-    use the minimum t_max instead of assuming blocks[0].
-    """
+    """Conservative per-block bound. Uses min t_max across mixed block sizes."""
     bounds = qr_block_bounds(version, level)
     if not bounds:
         return None
@@ -1068,11 +980,7 @@ def qr_total_data_bytes(version, level):
     return sum(b[0] for b in qr_block_layout(version, level))
 
 def qr_rs_encode_full(data, version, level):
-    """
-    Encode user data into a fully-interleaved QR codeword stream
-    (data interleaved + ecc interleaved). The output is the byte sequence
-    that gets placed in the QR matrix.
-    """
+    """Encode user data into a fully-interleaved QR codeword stream."""
     blocks = qr_block_layout(version, level)
     total_data = sum(b[0] for b in blocks)
     if len(data) < total_data:
@@ -1080,7 +988,7 @@ def qr_rs_encode_full(data, version, level):
     else:
         data = list(data[:total_data])
 
-    # Split into blocks, RS-encode each
+
     block_data = []
     block_ecc = []
     pos = 0
@@ -1104,9 +1012,7 @@ def qr_rs_encode_full(data, version, level):
     return interleaved
 
 def qr_de_interleave(codeword, version, level):
-    """
-    Reverse interleave a QR codeword stream into per-block (data, ecc) pairs.
-    """
+    """De-interleave QR stream into per-block (data, ecc) pairs."""
     blocks = qr_block_layout(version, level)
     nb = len(blocks)
     max_dk = max(b[0] for b in blocks)
@@ -1140,10 +1046,7 @@ def qr_interleave_blocks(block_data, block_ecc, blocks):
     return out
 
 def qr_wu_decode_full(codeword, version, level, t_target=None):
-    """
-    Multi-block Wu list decode. Returns a list of all mathematically valid
-    concatenated user data combinations, or None on failure.
-    """
+    """Multi-block Wu list decode. Returns all valid data combinations, or None."""
     block_pairs = qr_de_interleave(codeword, version, level)
     all_block_cands = []
     
@@ -1171,7 +1074,7 @@ def qr_wu_decode_full(codeword, version, level, t_target=None):
             return None
         all_block_cands.append(cands)
         
-    # Generate every combination if multiple blocks have multiple candidates
+    # cross-block combinations
     full_cands = []
     for combination in itertools.product(*all_block_cands):
         full_data = []
@@ -1181,9 +1084,7 @@ def qr_wu_decode_full(codeword, version, level, t_target=None):
         
     return full_cands
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  QR Code RS Parameters (from paulmillr/qr)
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- QR Code RS parameters (from paulmillr/qr) ---
 
 QR_ECC_WORDS = {
     'low':      [7,10,15,20,26,18,20,24,30,18,20,24,26,30,22,24,28,30,28,28,28,28,30,30,26,28,30,30,30,30,30,30,30,30,30,30,30,30,30,30],
@@ -1212,9 +1113,7 @@ def banner(text, w=70, ch='='):
 def section(label):
     print(f"\n{'─'*70}\n  {label}\n{'─'*70}")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Main CLI
-# ═══════════════════════════════════════════════════════════════════════════════
+# --- Main CLI ---
 
 def main():
     print()
@@ -1247,7 +1146,7 @@ def main():
             gap_b = t_max_b - t0_b
             total_data = sum(b[0] for b in blocks)
             configs.append((ver, level, blocks, total_data, t0_b, t_max_b, gap_b))
-    # Pretty-print in 2 columns to keep the menu compact
+
     for ci, c in enumerate(configs, start=1):
         ver, level, blocks, total_data, t0_b, t_max_b, gap_b = c
         nb = len(blocks)
@@ -1275,7 +1174,7 @@ def main():
     if nb == 1:
         print(f"  Single block: RS({n_b}, {bk_data}) over GF(2^8),  d = {ecc_w+1}")
     else:
-        # Show both block sizes if mixed
+
         sizes = sorted({(b[0]+b[1], b[0]) for b in blocks})
         sz_strs = [f"RS({nn},{kk})" for nn, kk in sizes]
         cnt = {s: sum(1 for b in blocks if (b[0]+b[1], b[0]) == s) for s in sizes}
@@ -1285,12 +1184,11 @@ def main():
     print(f"  BM unique radius : {t0} byte errors / block")
     print(f"  Wu list bound    : {t_max} byte errors / block  (+{gap} beyond BM)")
 
-    # Multi-block QR codes get their own simplified flow.
+
     if nb > 1:
         _multi_block_demo(ver, level, blocks, total_data, t0, t_max)
         return
 
-    # ── STEP 0: Encode ──
     section("STEP 0: MESSAGE INPUT & QR-STYLE RS ENCODING")
 
     print(f"\n  The RS({n}, {k}) code carries {k} data bytes.")
@@ -1309,12 +1207,12 @@ def main():
         data = [random.randrange(256) for _ in range(k)]
         print(f"\n  (Using random data, seed={seed})")
     else:
-        # Truncate to k bytes, pad with zeros if shorter
+
         msg_bytes = raw.encode('utf-8')[:k]
         data = list(msg_bytes) + [0] * (k - len(msg_bytes))
         print(f"\n  Input text: \"{raw}\"")
 
-    # Show the byte conversion
+
     print(f"\n  ┌─ Byte Encoding (QR Byte Mode) ──────────────────────────")
     print(f"  │")
     for i, b in enumerate(data):
@@ -1324,7 +1222,7 @@ def main():
     print(f"  │  Data bytes ({k}): {fmt_hex(data)}")
     print(f"  └────────────────────────────────────────────────────────")
 
-    # RS Encoding
+
     print(f"\n  ┌─ RS Encoding ────────────────────────────────────────────")
     print(f"  │")
     print(f"  │  Generator polynomial:")
@@ -1353,7 +1251,6 @@ def main():
     print(f"  │  Verification: R(α^i) = 0 for i=0..{ecc_w-1}  [PASS]")
     print(f"  └────────────────────────────────────────────────────────")
 
-    # ── STEP 1: Errors ──
     section("STEP 1: CHANNEL NOISE INJECTION")
     print(f"\n  How many byte errors?")
     print(f"    [1-{t0}]    BM unique decoding")
@@ -1387,13 +1284,11 @@ def main():
     else: lbl = f"Beyond guaranteed correction (t_max={t_max})"
     print(f"\n  {te} errors : {lbl}")
 
-    # ── STEP 2: Syndromes ──
     section("STEP 2: SYNDROME CALCULATION")
     syns = qr_rs_syndromes(rec, ecc_w)
     print(f"\n  S_i = R(alpha^i) for i = 0..{ecc_w-1}")
     print(f"  Syndromes: {fmt_hex(syns)}")
 
-    # ── STEP 3: BM ──
     section("STEP 3: BERLEKAMP-MASSEY ALGORITHM")
     cw_int = qr_to_internal(rec)
     syns_int = rs_syndromes(n, k, cw_int)
@@ -1402,7 +1297,7 @@ def main():
     print(f"  B(x) degree      : {pdeg(B)}")
     print(f"  L_Lambda + L_B   : {pdeg(Lam)+pdeg(B)}  (== n-k = {ecc_w})")
 
-    # ── STEP 4: Decode ──
+
     if te <= t0:
         section("STEP 4: UNIQUE DECODING (BM + Chien + Forney)")
         print(f"\n  {te} errors <= t0={t0}: direct BM decode...")
@@ -1427,7 +1322,7 @@ def main():
 
 
 def _try_text(data_bytes):
-    """Try to decode bytes as UTF-8 text, stripping trailing nulls."""
+    """Try to decode bytes as printable UTF-8."""
     stripped = data_bytes[:]
     while stripped and stripped[-1] == 0: stripped.pop()
     if not stripped: return None
@@ -1481,14 +1376,14 @@ def _show_list(rec, data_true, k, ecc_w, te, t0, t_max, n, ep):
 
 
 def _multi_block_demo(ver, level, blocks, total_data, t0, t_max):
-    """Multi-block QR demo: encode → corrupt → de-interleave → per-block Wu."""
+    """Multi-block QR demo flow."""
     nb = len(blocks)
     bk_data, ecc_w = blocks[0]
     n_block = bk_data + ecc_w
     block_bounds = qr_block_bounds(ver, level)
     bound_groups = qr_block_bound_groups(ver, level)
 
-    # Total interleaved length
+
     n_total = sum(b[0] + b[1] for b in blocks)
 
     section("STEP 0: MESSAGE INPUT & MULTI-BLOCK RS ENCODING")
@@ -1517,7 +1412,7 @@ def _multi_block_demo(ver, level, blocks, total_data, t0, t_max):
     cw = qr_rs_encode_full(data, ver, level)
     print(f"\n  Encoded {n_total}-byte interleaved stream:")
     print(f"    {fmt_hex_short(cw, mx=24)}")
-    # Sanity: round-trip
+
     block_pairs = qr_de_interleave(cw, ver, level)
     rt = []
     for bd, _ in block_pairs:
@@ -1525,7 +1420,7 @@ def _multi_block_demo(ver, level, blocks, total_data, t0, t_max):
     assert rt == data, "Round-trip via de-interleave failed!"
     print(f"  Round-trip via de-interleave: OK")
 
-    # Per-block Wu radius
+
     print(f"  Conservative per-block correction: BM <= {t0}, Wu <= {t_max} byte errors")
     for g in bound_groups:
         print(f"    {g['count']}x RS({g['n']},{g['k']}): BM <= {g['t0']}, Wu <= {g['t_max']}")
@@ -1546,7 +1441,7 @@ def _multi_block_demo(ver, level, blocks, total_data, t0, t_max):
     for i in ep:
         rec[i] ^= random.randrange(1, 256)
 
-    # Count errors per block
+
     block_pairs_corrupt = qr_de_interleave(rec, ver, level)
     block_pairs_orig = qr_de_interleave(cw, ver, level)
     per_block_err = []
