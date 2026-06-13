@@ -1163,9 +1163,9 @@ def qr_wu_decode_full(codeword, version, level, t_target=None):
             )
             cands = None
             for t_try in range(1, t_max_block + 1):
-                cands = qr_wu_decode(block_cw, k, ecc_w, t_target=t_try)
-                if cands:
-                    break
+                c = qr_wu_decode(block_cw, k, ecc_w, t_target=t_try)
+                if c and (cands is None or len(c) > len(cands)):
+                    cands = c
                     
         if not cands:
             return None

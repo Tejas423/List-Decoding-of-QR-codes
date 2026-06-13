@@ -1468,14 +1468,13 @@ def decode_raw_matrix(matrix, version=None):
         else:
             bm_data_blocks.append(bm_decoded)
 
-        # Wu list decode (progressive t)
+        # Wu list decode — try up to t_max, keep the result with most candidates
         block_cands = []
         for t_try in range(1, block_bound['t_max'] + 1):
             cands = W.qr_wu_decode(block_cw, k_blk, ecc_blk, t_target=t_try)
-            if cands:
+            if cands and len(cands) > len(block_cands):
                 block_cands = cands
                 max_t_used = max(max_t_used, t_try)
-                break
         if not block_cands:
             wu_all_ok = False
             wu_data_blocks.append([list(bd)])
