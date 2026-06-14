@@ -678,7 +678,7 @@ def wu_params(n, k, L_Lam, L_B, t=None):
     Ly_den = 2 * (tm - t0)
     best = None
     for m in range(m_start, m_start + 60):
-        if n * m * (m + 1) // 2 > 800: break
+        if n * m * (m + 1) // 2 > 2000: break
         Ly_opt = (tm * m - tm + t0) / Ly_den if Ly_den > 0 else 1
         for Ly in range(max(1, int(Ly_opt) - 1), int(Ly_opt) + 3):
             LQ = tm * m - 1 - (tm - L_Lam) * Ly; LQ = max(LQ, 0)
