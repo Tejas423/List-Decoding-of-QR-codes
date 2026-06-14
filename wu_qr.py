@@ -473,29 +473,152 @@ def hensel_series(Q, K, max_roots=64):
     return _py_hensel_series(Q, K, max_roots)
 
 def _py_rr_series(Q, K, max_br=256):
-    Ly = len(Q) - 1; results = []; stack = [(Q, [], 0)]
+    """Roth-Ruckenstein using linear probing on shifted polynomials.
+
+    At each depth, the algorithm shifts the bivariate polynomial Q via
+    Q(x, x*y + c) / x^r to normalize it.  Within each depth, the next
+    coefficient c_t is determined by exploiting linearity: evaluate the
+    shifted Q(0, y) and find its roots.  Because the coefficient of x^t
+    in Q(x, f(x)) is linear in c_t, the roots of Q(0, y) directly give
+    the valid c_t values.  When exactly one root exists the continuation
+    is unique; when all 256 values work the tree branches; when none
+    satisfy the equation the branch is pruned.
+
+    The linearity test is performed by computing:
+        s0 -> Q(0, 0) gives C(0)
+        s1 -> Q(0, 1) gives C(1)
+        A  =  C(1) ^ C(0)   (slope in char 2)
+    Then:
+        A != 0        -> unique c = C(0)/A
+        A == 0, C0==0 -> branch across all GF(2^8)
+        A == 0, C0!=0 -> prune
+    """
+    Ly = len(Q) - 1
+    if Ly < 0:
+        return []
+
+    results = []
+    stack = [(Q, [], 0)]
+
     while stack and len(results) < max_br:
         Qc, pre, dep = stack.pop()
-        if dep >= K: results.append(pre[:K]); continue
+        if dep >= K:
+            results.append(pre[:K])
+            continue
+
+        # Extract P(y) = Q(0, y) from the (shifted) polynomial
         P0 = [Qj[0] if Qj != [0] else 0 for Qj in Qc]
-        # roots of P0 over GF(256)
-        roots = []
-        for y in range(GF):
-            val = 0; py = 1
-            for c in P0:
-                val ^= gf_mul(c, py)
-                py = gf_mul(py, y)
-            if val == 0: roots.append(y)
-        for c in roots:
-            if len(results) >= max_br: break
-            np2 = pre + [c]
-            if dep + 1 >= K: results.append(np2[:K]); continue
-            Qn = _Qshift(Qc, c)
-            if Qn is None: results.append(np2 + [0] * (K - len(np2))); continue
-            stack.append((Qn, np2, dep + 1))
+
+        # Linear probing: evaluate P(0) and P(1) to determine slope
+        # P(y) = sum_j P0[j] * y^j
+        C0 = P0[0] if len(P0) > 0 else 0  # P(0)
+
+        # Evaluate P(1)
+        C1 = 0
+        for c in P0:
+            C1 ^= c  # P(1) = sum of all coefficients in char 2
+
+        A = C1 ^ C0  # slope
+
+        if A != 0:
+            # If Ly == 1 (linear in y), unique root: c = C0/A
+            # For higher Ly, fall back to full root search
+            if len(P0) <= 2:
+                # Linear: unique root
+                ct = gf_div(C0, A)
+                np2 = pre + [ct]
+                if dep + 1 >= K:
+                    results.append(np2[:K])
+                else:
+                    Qn = _Qshift(Qc, ct)
+                    if Qn is None:
+                        results.append(np2 + [0] * (K - len(np2)))
+                    else:
+                        stack.append((Qn, np2, dep + 1))
+            else:
+                # Higher degree: full root search over GF(256)
+                roots = []
+                for y in range(GF):
+                    val = 0; py = 1
+                    for c in P0:
+                        val ^= gf_mul(c, py)
+                        py = gf_mul(py, y)
+                    if val == 0:
+                        roots.append(y)
+                for ct in roots:
+                    if len(results) >= max_br:
+                        break
+                    np2 = pre + [ct]
+                    if dep + 1 >= K:
+                        results.append(np2[:K])
+                        continue
+                    Qn = _Qshift(Qc, ct)
+                    if Qn is None:
+                        results.append(np2 + [0] * (K - len(np2)))
+                        continue
+                    stack.append((Qn, np2, dep + 1))
+        elif C0 == 0:
+            if all(c == 0 for c in P0):
+                # Zero polynomial: any c_t works -> branch across all GF(2^8)
+                for ct in range(GF):
+                    if len(results) >= max_br:
+                        break
+                    np2 = pre + [ct]
+                    if dep + 1 >= K:
+                        results.append(np2[:K])
+                        continue
+                    Qn = _Qshift(Qc, ct)
+                    if Qn is None:
+                        results.append(np2 + [0] * (K - len(np2)))
+                        continue
+                    stack.append((Qn, np2, dep + 1))
+            else:
+                # P(0) = 0 but P is not the zero poly: 0 is a root, find all roots
+                roots = []
+                for y in range(GF):
+                    val = 0; py = 1
+                    for c in P0:
+                        val ^= gf_mul(c, py)
+                        py = gf_mul(py, y)
+                    if val == 0:
+                        roots.append(y)
+                for ct in roots:
+                    if len(results) >= max_br:
+                        break
+                    np2 = pre + [ct]
+                    if dep + 1 >= K:
+                        results.append(np2[:K])
+                        continue
+                    Qn = _Qshift(Qc, ct)
+                    if Qn is None:
+                        results.append(np2 + [0] * (K - len(np2)))
+                        continue
+                    stack.append((Qn, np2, dep + 1))
+        # else: A == 0 and C0 != 0 -> no root at y=0, but check all roots
+        else:
+            roots = []
+            for y in range(GF):
+                val = 0; py = 1
+                for c in P0:
+                    val ^= gf_mul(c, py)
+                    py = gf_mul(py, y)
+                if val == 0:
+                    roots.append(y)
+            for ct in roots:
+                if len(results) >= max_br:
+                    break
+                np2 = pre + [ct]
+                if dep + 1 >= K:
+                    results.append(np2[:K])
+                    continue
+                Qn = _Qshift(Qc, ct)
+                if Qn is None:
+                    results.append(np2 + [0] * (K - len(np2)))
+                    continue
+                stack.append((Qn, np2, dep + 1))
+
     seen = set(); uniq = []
     for s in results:
-        # keep full K-length series (trailing zeros matter for BM recovery)
         s = (s + [0] * K)[:K]
         key = tuple(s)
         if key not in seen: seen.add(key); uniq.append(s)

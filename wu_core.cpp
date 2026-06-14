@@ -588,7 +588,8 @@ static std::vector<Poly> hensel_series(const QPoly& Q, int K, int max_roots = 64
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  RR series (stack-based DFS fallback)
+//  RR series – linear-probing Roth-Ruckenstein (stack-based DFS)
+//  (reuses Q_eval_series from Hensel section above)
 // ═══════════════════════════════════════════════════════════════════════
 
 // Forward declaration
@@ -596,6 +597,9 @@ static QPoly Qshift(const QPoly& Q, int c);
 
 static std::vector<Poly> rr_series(const QPoly& Q, int K, int max_br = 256) {
     int Ly = (int)Q.size() - 1;
+    if (Ly < 0) return {};
+
+    // DFS stack: each frame carries the shifted polynomial
     struct Frame { QPoly Q; Poly pre; int dep; };
     std::vector<Frame> stack;
     stack.push_back({Q, {}, 0});
@@ -608,37 +612,63 @@ static std::vector<Poly> rr_series(const QPoly& Q, int K, int max_br = 256) {
             results.push_back(f.pre);
             continue;
         }
-        // Evaluate P0
+
+        // Extract P(y) = Q(0, y) from the shifted polynomial
         std::vector<int> P0(f.Q.size(), 0);
         for (int j = 0; j < (int)f.Q.size(); j++)
             P0[j] = (f.Q[j].size() > 0) ? f.Q[j][0] : 0;
 
-        std::vector<int> roots;
-        for (int y = 0; y < 256; y++) {
-            int val = 0, py = 1;
-            for (int j = 0; j < (int)P0.size(); j++) {
-                val ^= gf_mul((uint8_t)P0[j], (uint8_t)py);
-                py = gf_mul((uint8_t)py, (uint8_t)y);
-            }
-            if (val == 0) roots.push_back(y);
-        }
+        // Linear probing: evaluate P(0) and P(1)
+        int C0 = P0.empty() ? 0 : P0[0];  // P(0)
+        int C1 = 0;
+        for (int c : P0) C1 ^= c;  // P(1) = sum of coefficients in char 2
+        int A = C1 ^ C0;  // slope
 
-        for (int c : roots) {
-            if ((int)results.size() >= max_br) break;
-            Poly np2 = f.pre;
-            np2.push_back(c);
+        if (A != 0 && (int)P0.size() <= 2) {
+            // Linear in y: unique root c = C0/A
+            int ct = gf_div((uint8_t)C0, (uint8_t)A);
+            Poly np2 = f.pre; np2.push_back(ct);
             if (f.dep + 1 >= K) {
-                np2.resize(K);
-                results.push_back(np2);
-                continue;
+                np2.resize(K); results.push_back(np2);
+            } else {
+                QPoly Qn = Qshift(f.Q, ct);
+                if (Qn.empty()) { np2.resize(K, 0); results.push_back(np2); }
+                else stack.push_back({std::move(Qn), std::move(np2), f.dep + 1});
             }
-            QPoly Qn = Qshift(f.Q, c);
-            if (Qn.empty()) {
-                np2.resize(K, 0);
-                results.push_back(np2);
-                continue;
+        } else {
+            // Full root search over GF(256) for the shifted P(y)
+            bool allzero = true;
+            for (int c : P0) if (c != 0) { allzero = false; break; }
+
+            if (allzero) {
+                // Zero polynomial: any c_t works -> branch all 256
+                for (int ct = 0; ct < 256 && (int)results.size() < max_br; ct++) {
+                    Poly np2 = f.pre; np2.push_back(ct);
+                    if (f.dep + 1 >= K) { np2.resize(K); results.push_back(np2); continue; }
+                    QPoly Qn = Qshift(f.Q, ct);
+                    if (Qn.empty()) { np2.resize(K, 0); results.push_back(np2); continue; }
+                    stack.push_back({std::move(Qn), std::move(np2), f.dep + 1});
+                }
+            } else {
+                // Find roots of P(y) by brute force
+                std::vector<int> roots;
+                for (int y = 0; y < 256; y++) {
+                    int val = 0, py = 1;
+                    for (int j = 0; j < (int)P0.size(); j++) {
+                        val ^= gf_mul((uint8_t)P0[j], (uint8_t)py);
+                        py = gf_mul((uint8_t)py, (uint8_t)y);
+                    }
+                    if (val == 0) roots.push_back(y);
+                }
+                for (int ct : roots) {
+                    if ((int)results.size() >= max_br) break;
+                    Poly np2 = f.pre; np2.push_back(ct);
+                    if (f.dep + 1 >= K) { np2.resize(K); results.push_back(np2); continue; }
+                    QPoly Qn = Qshift(f.Q, ct);
+                    if (Qn.empty()) { np2.resize(K, 0); results.push_back(np2); continue; }
+                    stack.push_back({std::move(Qn), std::move(np2), f.dep + 1});
+                }
             }
-            stack.push_back({std::move(Qn), std::move(np2), f.dep + 1});
         }
     }
 
@@ -699,9 +729,9 @@ static QPoly Qshift(const QPoly& Q, int c) {
     }
     while (Qn.size() > 1 && Qn.back().size() == 1 && Qn.back()[0] == 0)
         Qn.pop_back();
-    bool allzero = true;
-    for (auto& q : Qn) if (!(q.size() == 1 && q[0] == 0)) { allzero = false; break; }
-    if (allzero) return {};
+    bool allz = true;
+    for (auto& q : Qn) if (!(q.size() == 1 && q[0] == 0)) { allz = false; break; }
+    if (allz) return {};
     return Qn;
 }
 
