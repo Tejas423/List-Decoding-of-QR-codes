@@ -133,7 +133,10 @@ def pgcd(a, b):
 _rs_gen_cache = {}
 
 def rs_generator(nsym):
-    """g(x) = prod_{i=0}^{nsym-1} (x - alpha^i).  In char 2, - = +."""
+    """Build the RS generator polynomial g(x) = (x - a^0)(x - a^1)...(x - a^{nsym-1}).
+    In GF(2^8), subtraction equals addition, so each factor is (x + a^i).
+    The resulting polynomial has nsym roots at consecutive powers of alpha,
+    which is the defining property of a Reed-Solomon code."""
     if nsym in _rs_gen_cache:
         return list(_rs_gen_cache[nsym])
     g = [1]
@@ -143,38 +146,58 @@ def rs_generator(nsym):
     return g
 
 def rs_encode(n, k, msg):
-    """Systematic RS encoding. Returns [parity | message]."""
+    """Systematic RS encoding: codeword = [parity | message].
+    Divides m(x) * x^(n-k) by g(x); the remainder becomes the parity bytes.
+    The message bytes are left untouched at the end of the codeword, making
+    it a systematic code (no decoding needed when there are zero errors)."""
     nsym = n - k
     g = rs_generator(nsym)
 
+    # shift message up by nsym positions, then do polynomial long division
     rem = [0] * nsym + list(msg[:k])
-    # polynomial long division
     for i in range(k - 1, -1, -1):
         coeff = rem[nsym + i]
         if coeff == 0: continue
         for j in range(nsym + 1):
             rem[i + j] ^= gf_mul(g[j], coeff)
 
+    # remainder (first nsym bytes) is the parity; append original message
     codeword = rem[:nsym] + list(msg[:k])
     return codeword
 
 def rs_syndromes(n, k, received):
-    """S_j = R(alpha^j) for j = 0, ..., n-k-1.  All zero for valid codewords."""
+    """Compute syndromes S_j = R(alpha^j) for j = 0..n-k-1.
+    Since valid codewords are multiples of g(x), and alpha^j are roots of g(x),
+    any valid codeword evaluates to zero at these points. Non-zero syndromes
+    indicate the presence of errors; the syndrome values depend only on the
+    error polynomial E(x), not the original message."""
     nsym = n - k
     return [peval(received, _alpha_pow[j]) for j in range(nsym)]
 
 # --- Berlekamp-Massey over GF(2^8) ---
+# The core shift-register synthesis algorithm. Given a sequence of syndromes,
+# it finds the shortest linear recurrence (LFSR) that generates them.
+# Output: Lambda(x) = error locator polynomial, B(x) = scratch polynomial.
+# If the number of errors <= t0, Lambda's roots directly give error locations.
+# If errors > t0, Lambda is "fake" but B is still algebraically useful:
+# Wu's list decoder rescues both Lambda and B to seed the interpolation step.
 
 def _py_berlekamp_massey(S):
-    """BM on syndromes. Returns (Lambda, B) with L_Lambda + L_B = N."""
+    """Berlekamp-Massey shift-register synthesis.
+    Returns (Lambda, B) where:
+      Lambda = error locator polynomial (roots at alpha^{-i} for error positions i)
+      B = auxiliary scratch polynomial (used by Wu's list decoder when BM fails)
+    Invariant: deg(Lambda) + deg(B) = N (number of syndromes processed)."""
     N = len(S); C = [1]; B = [1]; L = 0; dp = 1
     for r in range(N):
+        # compute discrepancy: how much the current LFSR disagrees with S[r]
         delta = S[r]
         for i in range(1, L + 1):
             if i < len(C) and r - i >= 0:
                 delta ^= gf_mul(C[i], S[r - i])
         T = C[:]
         if delta != 0:
+            # LFSR update: C(x) -= (delta/dp) * x * B(x)
             sc = gf_mul(delta, gf_inv(dp))
             xB = [0] + B
             xBs = [gf_mul(c, sc) for c in xB]
@@ -182,12 +205,15 @@ def _py_berlekamp_massey(S):
             C = [(C[i] if i < len(C) else 0) ^ (xBs[i] if i < len(xBs) else 0) for i in range(ml)]
             C = ps(C)
             if 2 * L <= r:
+                # length change: swap roles of C and B
                 B = T[:]; L = r + 1 - L; dp = delta
             else:
                 B = [0] + B
         else:
+            # no discrepancy, just shift B
             B = [0] + B
     C = ps(C); B = ps(B)
+    # normalize so Lambda(0) = 1 (monic in the constant term)
     if C[0] != 0:
         iv = gf_inv(C[0])
         C = [gf_mul(c, iv) for c in C]
@@ -199,8 +225,16 @@ def berlekamp_massey(S):
     return _py_berlekamp_massey(S)
 
 # --- Nullspace over GF(2^8) (Gaussian elimination) ---
+# The interpolation step produces a homogeneous linear system A*q = 0.
+# We need a non-trivial vector q in the null space of A, which gives us
+# the coefficients of the bivariate polynomial Q(x,y).
+# Any valid null-space vector works because the true error locator is
+# guaranteed to be a root of every Q(x,y) in the null space.
 
 def _py_nullspace(A):
+    """Find basis vectors of ker(A) over GF(2^8) via Gauss-Jordan elimination.
+    Returns a list of vectors spanning the null space. If the null space is
+    empty, returns []. Uses numpy for vectorized row operations."""
     m = len(A)
     if m == 0: return []
     nc = len(A[0])
@@ -245,49 +279,72 @@ def nullspace(A):
     return _py_nullspace(A)
 
 # --- Interpolation system ---
+# This section constructs the linear system for Wu's rational interpolation.
+# We build a matrix where each row enforces Q(x_i, y_i) = 0 with multiplicity m.
+# The unknowns are the coefficients Q_{i,j} of the bivariate polynomial
+# Q(x,y) = sum_{i,j} Q_{i,j} * x^i * y^j, restricted by (1,w)-weighted degree.
 
 def binom2(n, k):
-    """C(n,k) mod 2 via Lucas' theorem: 1 iff k is a submask of n."""
+    """Binomial coefficient C(n,k) mod 2 via Lucas' theorem.
+    In characteristic 2, C(n,k) = 1 iff every bit of k is also set in n.
+    Used for Hasse derivatives in the multiplicity constraints."""
     if k < 0 or k > n: return 0
     return 1 if (k & n) == k else 0
 
 def monomial_list(Ly, LQ, w):
+    """Enumerate all monomials x^i * y^j satisfying the (1,w)-weighted degree
+    constraint: i + w*j <= LQ, with j ranging from 0 to Ly.
+    Returns list of (i,j) pairs. The total count equals N_coeff."""
     mons = []
     for j in range(Ly + 1):
-        mx = LQ - w * j
+        mx = LQ - w * j       # max x-degree for this y-power
         if mx < 0: continue
         for i in range(mx + 1):
             mons.append((i, j))
     return mons
 
 def _py_build_interp(xs, ys, is_inf, m, mons, Ly):
+    """Build the interpolation constraint matrix.
+    For each rational point (x_i, y_i), enforces Q(x_i, y_i) = 0 with
+    multiplicity m by requiring all Hasse partial derivatives of order < m
+    to vanish. This produces m*(m+1)/2 rows per point (triangle of constraints).
+
+    Edge case (y_i = infinity): When the denominator x*B(alpha^{-i}) = 0,
+    the y-coordinate is infinite. Instead of plugging infinity into the matrix,
+    we use the companion polynomial trick: force the highest y-coefficients
+    Q_{Ly}, Q_{Ly-1}, ... to vanish at x_i. This elegantly handles poles
+    without any special-case arithmetic."""
     nm = len(mons); rows = []
     if nm == 0: return rows
     mi = max(i for i, _ in mons)
     mj = max(j for _, j in mons)
     mon_i = np.array([i for i, _ in mons], dtype=np.int32)
     mon_j = np.array([j for _, j in mons], dtype=np.int32)
-    # precompute binom2 masks
+    # precompute binom2 masks for Hasse derivative constraints
     fin_masks = {}
     for a in range(m):
         for b in range(m - a):
             fin_masks[(a, b)] = np.array(
                 [(i >= a and j >= b and (a & i) == a and (b & j) == b) for i, j in mons], dtype=bool)
+    # masks for infinity points: only target the highest y-coefficients
     inf_masks = {}
     for a in range(m):
         for b in range(m - a):
             if b > Ly: continue
-            jt = Ly - b
+            jt = Ly - b     # companion polynomial reversal: target y^{Ly-b}
             inf_masks[(a, b)] = np.array(
                 [(j == jt and i >= a and (a & i) == a) for i, j in mons], dtype=bool)
     for ti in range(len(xs)):
         xt = xs[ti]
         if not is_inf[ti]:
+            # --- Finite point: standard multiplicity constraints ---
             yt = ys[ti]
+            # precompute powers of x_i and y_i for Hasse derivative evaluation
             px = np.ones(mi + 1, dtype=np.int32)
             for e in range(1, mi + 1): px[e] = gf_mul(int(px[e-1]), xt)
             py = np.ones(mj + 1, dtype=np.int32)
             for e in range(1, mj + 1): py[e] = gf_mul(int(py[e-1]), yt)
+            # loop over all (a,b) with a+b < m (triangle of partial derivatives)
             for a in range(m):
                 for b in range(m - a):
                     mask = fin_masks[(a, b)]
@@ -302,6 +359,9 @@ def _py_build_interp(xs, ys, is_inf, m, mons, Ly):
                             row[mask] = vals
                     rows.append(row.tolist())
         else:
+            # --- Infinity point: companion polynomial constraints ---
+            # Forces the top y-coefficients of Q to vanish at x_i,
+            # which mathematically guarantees a pole in the rational curve
             px = np.ones(mi + 1, dtype=np.int32)
             for e in range(1, mi + 1): px[e] = gf_mul(int(px[e-1]), xt)
             for a in range(m):
@@ -321,6 +381,9 @@ def build_interp(xs, ys, is_inf, m, mons, Ly):
     return _py_build_interp(xs, ys, is_inf, m, mons, Ly)
 
 def vec_to_Q(vec, mons, Ly):
+    """Convert a flat coefficient vector (from the null space) into a
+    bivariate polynomial Q(x,y) = [Q_0(x), Q_1(x), ..., Q_Ly(x)],
+    where Q_j(x) holds the x-coefficients for the y^j slice."""
     mx = [0] * (Ly + 1)
     for i, j in mons:
         if j <= Ly and i > mx[j]: mx[j] = i
@@ -329,11 +392,15 @@ def vec_to_Q(vec, mons, Ly):
         if j <= Ly: Q[j][i] ^= c
     return [ps(Qj) for Qj in Q]
 
-# --- Hensel Lifting (Newton iteration for power series roots) ---
-# quadratic convergence: K terms in O(log K) steps, no branching after step 0
+# --- Hensel Lifting (Newton-Raphson iteration for power series roots) ---
+# After solving for Q(x,y), we need to extract its y-roots as power series.
+# Hensel lifting uses Newton's method: given an initial root y0 of Q(0,y),
+# it iteratively refines the approximation s(x) such that Q(x, s(x)) = 0
+# to increasing precision. Each step doubles the number of correct terms
+# (quadratic convergence), so K terms are computed in O(log K) iterations.
 
 def _ptrunc(a, m):
-    """Truncate poly mod x^m."""
+    """Truncate polynomial to precision x^m (discard terms of degree >= m)."""
     if m <= 0: return [0]
     return ps((a + [0] * m)[:m])
 
@@ -355,21 +422,25 @@ def _pmul_mod(a, b, m):
     return ps(out.tolist())
 
 def _pinv_mod(f, m):
-    """f(x)^{-1} mod x^m via Newton. In char 2: g_{i+1} = f*g_i^2. Requires f(0) != 0."""
+    """Compute f(x)^{-1} mod x^m via Newton iteration.
+    In characteristic 2, the update simplifies to g_{i+1} = f * g_i^2.
+    Requires f(0) != 0 (constant term must be invertible).
+    Returns None if f is not invertible."""
     if f == [0] or f[0] == 0:
         return None  # not invertible
-    g = [gf_inv(f[0])]  # g_0 = f(0)^{-1}, correct mod x^1
+    g = [gf_inv(f[0])]  # base case: g_0 = 1/f(0), correct mod x^1
     prec = 1
     while prec < m:
         new_prec = min(prec * 2, m)
-        # g = f * g^2 mod x^{new_prec}
+        # Newton step for modular inverse: g = f * g^2 mod x^{new_prec}
         g2 = _pmul_mod(g, g, new_prec)
         g = _pmul_mod(f, g2, new_prec)
         prec = new_prec
     return _ptrunc(g, m)
 
 def _Q_eval_series(Q, s, m):
-    """Evaluate Q(x, s(x)) mod x^m."""
+    """Evaluate Q(x, s(x)) mod x^m by substituting the power series s(x)
+    into the y-variable of Q. Computes sum_j Q_j(x) * s(x)^j mod x^m."""
     result = _ptrunc(Q[0], m) if Q[0] != [0] else [0]
     s_pow = [1]  # s^0 = 1
     for j in range(1, len(Q)):
@@ -380,7 +451,12 @@ def _Q_eval_series(Q, s, m):
     return _ptrunc(result, m)
 
 def _Qy_eval_series(Q, s, m):
-    """dQ/dy(x, s(x)) mod x^m. In char 2 only odd-j terms survive."""
+    """Evaluate dQ/dy(x, s(x)) mod x^m (formal derivative w.r.t. y).
+    In characteristic 2, the formal derivative kills even-powered terms:
+    d/dy(y^j) = j * y^{j-1}, and j mod 2 = 0 means the term vanishes.
+    Only odd-j slices of Q contribute to the derivative.
+    Edge case: if Q_y evaluates to zero, Newton-Raphson cannot proceed
+    (division by zero), and we fall back to the RR root-finding method."""
     result = [0]
     s_pow = [1]  # s^0
     for j in range(1, len(Q)):
@@ -389,16 +465,25 @@ def _Qy_eval_series(Q, s, m):
                 # j * Q_j * s^{j-1} = Q_j * s^{j-1} (since j is odd, j mod 2 = 1)
                 term = _pmul_mod(Q[j], s_pow, m)
                 result = padd(result, term)
-        s_pow = _pmul_mod(s_pow, s, m)  # s^j (for next iteration, s^{j-1+1} = s^j)
+        s_pow = _pmul_mod(s_pow, s, m)  # s^j (for next iteration)
     return _ptrunc(result, m)
 
 def _py_hensel_series(Q, K, max_roots=64):
-    """Find power series roots of Q(x,y) to precision K via Hensel lifting."""
+    """Extract power series roots of Q(x,y) to precision K via Hensel lifting.
+    Algorithm:
+      1. Find all initial roots y0 where Q(0, y0) = 0 (brute-force over GF(256)).
+      2. For each y0, iteratively refine via Newton's method:
+         s_new = s - Q(x,s) / Q_y(x,s)  mod x^{new_prec}
+         Precision doubles each step (quadratic convergence).
+      3. Edge case: if Q_y(x,s) has zero constant term, Newton fails (can't
+         invert the derivative). We abandon this root and let the RR fallback
+         handle it instead.
+      4. Final verification: check Q(x, s(x)) = 0 mod x^K to reject spurious roots."""
     Ly = len(Q) - 1
     if Ly < 0:
         return []
 
-    # roots at x=0
+    # Step 1: find initial roots y0 by evaluating Q(0, y) for all y in GF(256)
     P0 = [Qj[0] if Qj != [0] else 0 for Qj in Q]
     initial_roots = []
     for y in range(GF):
@@ -413,15 +498,15 @@ def _py_hensel_series(Q, K, max_roots=64):
 
     results = []
     for y0 in initial_roots:
-        # lift from s = [y0] to K terms
+        # Step 2: lift from single coefficient s = [y0] to K terms
         s = [y0]
         prec = 1
 
         success = True
         while prec < K:
-            new_prec = min(prec * 2, K)
+            new_prec = min(prec * 2, K)  # double precision each iteration
 
-
+            # evaluate Q(x, s(x)) at current approximation
             Qs = _Q_eval_series(Q, s, new_prec)
 
             if all(c == 0 for c in _ptrunc(Qs, new_prec)):
@@ -430,35 +515,38 @@ def _py_hensel_series(Q, K, max_roots=64):
                 prec = new_prec
                 continue
 
-
+            # compute formal derivative Q_y(x, s(x))
             Qys = _Qy_eval_series(Q, s, new_prec)
 
-            # Q_y must be invertible
+            # Edge case: derivative has zero constant term -> Newton fails
+            # This happens when all even-powered y-terms dominate at this point.
+            # We cannot divide by zero, so we abandon this root entirely.
             if Qys == [0] or Qys[0] == 0:
                 success = False
                 break
 
-
+            # invert Q_y mod x^{new_prec} for the Newton division step
             Qys_inv = _pinv_mod(Qys, new_prec)
             if Qys_inv is None:
                 success = False
                 break
 
-            # Newton step: s_new = s - Q/Q_y mod x^{new_prec}
+            # Newton step: s_new = s - Q(x,s)/Q_y(x,s) mod x^{new_prec}
+            # In char 2, subtraction = addition, so s_new = s + delta
             delta = _pmul_mod(Qs, Qys_inv, new_prec)
             s_new = padd((s + [0] * new_prec)[:new_prec], _ptrunc(delta, new_prec))
             s = _ptrunc(s_new, new_prec)
             prec = new_prec
 
-
+        # pad to full precision K
         s = (s + [0] * K)[:K]
 
-        # verify Q(x,s) = 0 mod x^K
+        # Step 4: verify that s(x) is actually a root of Q to full precision
         Qs_final = _Q_eval_series(Q, s, K)
         if all(c == 0 for c in _ptrunc(Qs_final, K)):
             results.append(s)
 
-
+    # deduplicate roots (different initial y0 values may converge to same series)
     seen = set(); uniq = []
     for s in results:
         key = tuple(s)
@@ -471,6 +559,13 @@ def hensel_series(Q, K, max_roots=64):
     if _HAS_CPP:
         return _cpp.hensel_series(Q, K, max_roots)
     return _py_hensel_series(Q, K, max_roots)
+
+# --- Roth-Ruckenstein Fallback (exhaustive root-finding for power series) ---
+# When Hensel lifting fails (e.g., derivative Q_y evaluates to zero at a root),
+# we fall back to this method. It uses a depth-first tree search, extending
+# the series one coefficient at a time by solving Q(0, y) = 0 at each depth
+# after a polynomial substitution y -> c + x*y_next.
+# Slower than Hensel (linear convergence vs quadratic) but handles all edge cases.
 
 def _py_rr_series(Q, K, max_br=256):
     """Roth-Ruckenstein using linear probing on shifted polynomials.
@@ -630,11 +725,17 @@ def rr_series(Q, K, max_br=256):
     return _py_rr_series(Q, K, max_br)
 
 def _Qshift(Q, c):
-    """Q(x, c + x*y) / x^v"""
+    """Polynomial substitution: Q(x, c + x*y) / x^v.
+    Shifts the y-variable by the constant c, then factors out the highest
+    possible power of x (normalization). This prepares Q for the next depth
+    of the Roth-Ruckenstein tree search.
+    The binomial expansion uses Lucas' theorem (binom2) for char-2 coefficients.
+    Returns None if Q becomes identically zero after the shift."""
     Ly = len(Q) - 1
-    # binomial and power tables (mod 2)
+    # precompute powers of c for the binomial expansion
     pc = [1] * (Ly + 1)
     for e in range(1, Ly + 1): pc[e] = gf_mul(pc[e-1], c)
+    # compute the shifted polynomial slices S[r] = sum_j C(j,r) * c^{j-r} * Q_j
     S = []
     for r in range(Ly + 1):
         Sr = [0]
@@ -644,6 +745,7 @@ def _Qshift(Q, c):
             cf = pc[j - r]
             if cf: Sr = padd(Sr, pscalar(Q[j], cf))
         S.append(Sr)
+    # find minimum combined x-valuation across all slices
     minv = float('inf')
     for r in range(Ly + 1):
         if S[r] == [0]: continue
@@ -651,6 +753,7 @@ def _Qshift(Q, c):
         while v < len(S[r]) and S[r][v] == 0: v += 1
         if v < len(S[r]) and r + v < minv: minv = r + v
     if minv == float('inf'): return None
+    # divide out x^v to normalize
     v = minv; Qn = []
     for r in range(Ly + 1):
         sh = v - r
@@ -663,31 +766,53 @@ def _Qshift(Q, c):
     return Qn
 
 # --- Parameter computation ---
+# Computes the optimal (m, Ly, LQ) triple for Wu's interpolation.
+# Uses a guess-and-check loop: start with a lower bound on m (the multiplicity),
+# compute the optimal Ly (max y-degree) and LQ (weighted degree bound),
+# then verify that N_coeff > N_eq (more unknowns than constraints).
+# The target error count t is capped at the Johnson Bound: n - sqrt(n*(k-1)).
 
 def wu_params(n, k, L_Lam, L_B, t=None):
-    d = n - k + 1; t0 = d // 2; L_xB = L_B + 1; w = L_Lam - L_xB
+    """Compute interpolation parameters for Wu's list decoder.
+    Inputs:
+      n, k     = RS code parameters (block length, data length)
+      L_Lam    = degree of failed error locator Lambda from first BM
+      L_B      = degree of scratch polynomial B from first BM
+      t        = target number of errors (None = push to Johnson Bound)
+    Returns dict with: t, t0, m, Ly, LQ, w, Ls, L_xB, ok."""
+    d = n - k + 1; t0 = d // 2       # standard unique decoding radius
+    L_xB = L_B + 1                    # degree of x*B(x)
+    w = L_Lam - L_xB                  # (1,w)-weight for the bivariate polynomial
+    # Johnson Bound: maximum correctable errors for list decoding
     bnd = n - math.sqrt(n * (k - 1))
     tm = int(math.floor(bnd - 1e-9)) if t is None else min(t, int(math.floor(bnd - 1e-9)))
-    tm = max(tm, t0 + 1); gap = bnd - tm
+    tm = max(tm, t0 + 1)             # must exceed standard radius
+    gap = bnd - tm                    # margin below Johnson Bound
+    # initial guess for multiplicity m based on the effort gap
     m_start = int(math.ceil((tm - t0) / gap)) if gap > 1e-9 else 100
     m_start = max(m_start, 1)
+    # increase m until the N_coeff > N_eq inequality is satisfiable
     while (tm * m_start + tm - t0) ** 2 <= 2 * n * m_start * (m_start + 1) * (tm - t0):
         m_start += 1
         if m_start > 500:  # safety cap
             break
     Ly_den = 2 * (tm - t0)
     best = None
+    # search over m and nearby Ly values for the smallest valid configuration
     for m in range(m_start, m_start + 60):
-        if n * m * (m + 1) // 2 > 2000: break
+        if n * m * (m + 1) // 2 > 1000: break  # matrix too large for RAM
         Ly_opt = (tm * m - tm + t0) / Ly_den if Ly_den > 0 else 1
         for Ly in range(max(1, int(Ly_opt) - 1), int(Ly_opt) + 3):
             LQ = tm * m - 1 - (tm - L_Lam) * Ly; LQ = max(LQ, 0)
             if (tm - L_Lam) * Ly + LQ >= tm * m: continue
+            # count total unknowns (N_coeff)
             nu = 0
             for j in range(Ly + 1):
                 mx = LQ - w * j
                 if mx >= 0: nu += mx + 1
+            # count total constraints (N_eq)
             nc = n * m * (m + 1) // 2
+            # Golden Rule: N_coeff must strictly exceed N_eq
             if nu > nc:
                 if best is None or m < best[0]:
                     best = (m, nu - nc, Ly, LQ)
@@ -695,31 +820,39 @@ def wu_params(n, k, L_Lam, L_B, t=None):
     if best is not None:
         m, _, Ly, LQ = best
     else:
+        # fallback: use initial guess even if inequality isn't proven
         m = m_start
         Ly = max(1, (tm * m - tm + t0) // Ly_den if Ly_den > 0 else 1)
         LQ = Ly * (tm - L_xB) + tm - t0 - 1; LQ = max(LQ, 0)
+    # Ls = required power series precision for the secondary BM step
     Ls = max(3 * tm - 2 * t0 - L_Lam, 4 * (tm - t0), 2)
     return dict(t=tm, t0=t0, m=m, Ly=Ly, LQ=LQ, w=w, Ls=Ls, L_xB=L_xB, ok=best is not None)
 
 # --- Chien search (register recurrence) ---
+# Exhaustively evaluates the error locator polynomial at all n positions
+# to find which positions are actual error locations.
+# Uses a shift-register trick: instead of recomputing alpha^{-i} each time,
+# it multiplies running registers by alpha^{-j} each step.
 
 def _py_chien_search(poly, n):
-    """Find positions i where poly(alpha^{-i}) = 0."""
+    """Find all positions i in [0..n-1] where poly(alpha^{-i}) = 0.
+    Each such position corresponds to a byte in the codeword that was corrupted.
+    Returns list of error positions."""
     deg = pdeg(poly)
     if deg <= 0:
         return []
     coeffs = (poly + [0] * (deg + 1))[:deg + 1]
     regs = np.array(coeffs, dtype=np.int32)
+    # multipliers: alpha^{-j} for each register j
     mults = np.array([_alpha_neg[j] for j in range(deg + 1)], dtype=np.int32)
-
     mult_logs = LOG_NP[mults]
     err_pos = []
     for i in range(n):
-
+        # sum all registers; if XOR reduces to 0, this position is a root
         val = int(np.bitwise_xor.reduce(regs))
         if val == 0:
             err_pos.append(i)
-        # update registers: regs[j] *= alpha^{-j}
+        # shift all registers: regs[j] *= alpha^{-j}
         nz = regs != 0
         new_regs = np.zeros_like(regs)
         new_regs[nz] = EXP_NP[LOG_NP[regs[nz]] + mult_logs[nz]]
@@ -732,36 +865,52 @@ def chien_search(poly, n):
     return _py_chien_search(poly, n)
 
 # --- Recovery: series -> (lambda, b) -> Lambda* -> decode ---
+# This is the final synthesis step of Wu's algorithm. Given a power series s(x)
+# extracted from Q(x,y), we run a secondary BM to find lambda(x) and b(x),
+# then combine them with the original failed Lambda and B to form the
+# genuine error locator: Lambda*(x) = Lambda(x)*lambda(x) + x*B(x)*b(x).
+# Finally, Chien search on Lambda* gives the true error positions.
 
 def recover_from_series(n, k, series, Lambda, B, L_Lam, L_xB, t, t0, received):
-    xB = [0] + B; results = []
+    """Synthesize the genuine error locator from a power series root.
+    Tries multiple fraction decompositions (BM on subsequence, BM on full series,
+    and Pade approximation) to maximize the chance of finding valid candidates."""
+    xB = [0] + B  # x * B(x): shift scratch polynomial by one position
+    results = []
     pairs = []
-    # BM on subsequence
+    # Strategy 1: BM on a carefully chosen subsequence of the series
     start = max(0, t - L_xB + 1); bm_len = 2 * (t - L_Lam)
     if bm_len > 0 and start + bm_len <= len(series):
         sub = series[start:start + bm_len]
-        lam, _ = berlekamp_massey(sub)
+        lam, _ = berlekamp_massey(sub)       # secondary BM -> denominator lambda(x)
         trunc = max(t - L_xB + 1, pdeg(lam) + 1)
-        b2 = pmul(series[:trunc], lam); b2 = ps(b2[:trunc])
+        b2 = pmul(series[:trunc], lam)       # numerator b(x) = s(x) * lambda(x)
+        b2 = ps(b2[:trunc])
         pairs.append((lam, b2))
-    # BM on full series
+    # Strategy 2: BM on the full series (may find different fraction)
     lam2, _ = berlekamp_massey(series)
     trunc2 = max(pdeg(lam2) + 1, 1)
     b3 = pmul(series[:trunc2], lam2); b3 = ps(b3[:trunc2])
     pairs.append((lam2, b3))
-    # Pade approximation
+    # Strategy 3: Pade approximation (extended Euclidean algorithm approach)
     pairs.extend(pade_approx(series, max(t - L_xB, 1), max(t - L_Lam, 1)))
 
+    # For each (lambda, b) pair, synthesize the genuine error locator
     for lam, b_poly in pairs:
+        # Core formula: Lambda*(x) = Lambda(x)*lambda(x) + x*B(x)*b(x)
         Lstar = padd(pmul(Lambda, lam), pmul(xB, b_poly))
         Lstar = ps(Lstar)
         if Lstar == [0]: continue
+        # normalize so Lambda*(0) = 1
         if Lstar[0] != 0:
             iv = gf_inv(Lstar[0]); Lstar = [gf_mul(c, iv) for c in Lstar]
 
+        # Chien search to find error positions from Lambda*
         err_pos = chien_search(Lstar, n)
+        # validation: number of roots must match degree, and not exceed target
         if len(err_pos) != pdeg(Lstar) or len(err_pos) > t or len(err_pos) == 0:
             continue
+        # solve for error magnitudes at the found positions
         msg = decode_from_positions(n, k, err_pos, received)
         if msg is not None: results.append(msg)
     return results
@@ -793,23 +942,30 @@ def pade_approx(series, max_dl, max_db):
     return results
 
 def decode_from_positions(n, k, err_pos, received):
-    """Solve for error values at known positions and decode."""
+    """Given known error positions, solve for error magnitudes and correct.
+    Uses the syndrome equation: S_j = sum_k e_k * X_k^j, where
+    X_k = alpha^{pos_k} are the known error locations and e_k are unknowns.
+    Builds a linear system (Vandermonde-like matrix) and solves via Gaussian
+    elimination. Verifies the corrected codeword has all-zero syndromes."""
     nsym = n - k; ne = len(err_pos)
     if ne == 0:
+        # no errors to correct; just verify and extract
         syns = rs_syndromes(n, k, received)
         if all(s == 0 for s in syns): return extract_message(n, k, received)
         return None
     syns = rs_syndromes(n, k, received)
-    # syndrome matrix
+    # build syndrome matrix: A[j][c] = X_c^j where X_c = alpha^{pos_c}
     Xlocs = [_alpha_pow[pos] for pos in err_pos]
     A = [[gf_pow(Xlocs[c], j) for c in range(ne)] for j in range(ne)]
     rhs = syns[:ne]
+    # solve A * e = S for error magnitudes e
     ev = solve_linear(A, rhs)
     if ev is None: return None
+    # apply corrections: received[pos] ^= error_magnitude
     corrected = received[:]
     for idx, pos in enumerate(err_pos):
         corrected[pos] ^= ev[idx]
-
+    # final verification: corrected codeword must have all-zero syndromes
     syn2 = rs_syndromes(n, k, corrected)
     if not all(s == 0 for s in syn2): return None
     return extract_message(n, k, corrected)
@@ -819,9 +975,13 @@ def extract_message(n, k, codeword):
     return list(codeword[n - k:])
 
 def solve_linear(A, b):
+    """Solve A*x = b over GF(2^8) via Gauss-Jordan elimination.
+    Returns solution vector x, or None if the system is singular."""
     m = len(A)
     if m == 0: return []
-    nc = len(A[0]); aug = [A[i][:] + [b[i]] for i in range(m)]
+    nc = len(A[0])
+    # build augmented matrix [A | b]
+    aug = [A[i][:] + [b[i]] for i in range(m)]
     for col in range(min(m, nc)):
         piv = None
         for r in range(col, m):
@@ -838,6 +998,9 @@ def solve_linear(A, b):
     return [aug[c][nc] for c in range(min(m, nc))]
 
 # --- GS polynomial fallback ---
+# A secondary fallback that uses the Guruswami-Sudan style interpolation
+# directly on (alpha^i, received[i]) evaluation points, bypassing the
+# BM-based rational curve. Used when the Wu-specific approach cannot proceed.
 
 def gs_poly_fallback(n, k, received, t):
     w = k - 1
@@ -886,27 +1049,49 @@ def gs_poly_fallback(n, k, received, t):
     return dedup(k, all_cands)
 
 # --- Main decoder ---
+# The top-level Wu list decoding pipeline. This function orchestrates the
+# entire decoding process:
+#   1. Compute syndromes (detect errors)
+#   2. Run Berlekamp-Massey (attempt standard unique decoding)
+#   3. If BM fails or we want to push beyond t0:
+#      a. Compute interpolation parameters (m, Ly, LQ)
+#      b. Build rational interpolation points from Lambda and B
+#      c. Construct and solve the interpolation matrix
+#      d. Extract power series via Hensel lifting (or RR fallback)
+#      e. Synthesize genuine error locator Lambda* via secondary BM
+#      f. Chien search + linear solve to get corrected candidates
+#   4. Return deduplicated list of candidate messages
 
 def _py_wu_decode(n, k, received, t_target=None, verbose=False):
+    """Wu's list decoder for RS(n, k) over GF(2^8).
+    Returns a list of candidate messages (each is a list of k bytes).
+    t_target = desired error correction target (None = push to Johnson Bound)."""
     nsym = n - k
+    # Step 1: Syndrome calculation
     syns = rs_syndromes(n, k, received)
     if all(s == 0 for s in syns):
+        # all syndromes zero -> no errors detected, return message directly
         msg = extract_message(n, k, received)
         return [msg] if msg else []
 
+    # Step 2: Primary Berlekamp-Massey
+    # Produces Lambda (error locator) and B (scratch polynomial)
     Lambda, B = berlekamp_massey(syns)
     L_Lam = pdeg(Lambda); L_B = pdeg(B); L_xB = L_B + 1
 
-    # BM unique decode
+    # Try standard unique decoding first (works if errors <= t0)
     msg_u = _try_unique(n, k, Lambda, received, syns)
 
+    # if unique decode succeeded and target is within standard radius, done
     if msg_u is not None and t_target is not None and t_target <= (n - k + 1) // 2:
         return [msg_u]
 
+    # Step 3: Compute Wu's interpolation parameters
     par = wu_params(n, k, L_Lam, L_B, t=t_target)
     t = par['t']; t0 = par['t0']; m = par['m']; Ly = par['Ly']
     LQ = par['LQ']; w = par['w']; Ls = par['Ls']
 
+    # if parameter search failed, retry at absolute Johnson Bound
     if not par['ok']:
         bnd = n - math.sqrt(n * (k - 1))
         t_max_abs = int(math.floor(bnd - 1e-9))
@@ -915,22 +1100,26 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
             par = par2; t = par['t']; m = par['m']; Ly = par['Ly']
             LQ = par['LQ']; w = par['w']; Ls = par['Ls']
         else:
-
+            # cannot find valid parameters; return BM result if available
             return [msg_u] if msg_u else []
 
+    # sanity check: BM polynomial degrees must not exceed target
     if L_Lam > t:
         return [msg_u] if msg_u else []
     if L_xB > t:
         return [msg_u] if msg_u else []
 
-    # rational points
+    # Step 4: Compute rational interpolation points
+    # For each position i, evaluate y_i = Lambda(alpha^{-i}) / (alpha^{-i} * B(alpha^{-i}))
+    # Edge case: if denominator = 0, mark as infinity (pole)
     xs, ys, isinf = [], [], []
     for i in range(n):
         xi = _alpha_neg[i]
         lv = peval(Lambda, xi); bv = peval(B, xi)
-        dn = gf_mul(xi, bv)
+        dn = gf_mul(xi, bv)  # denominator = alpha^{-i} * B(alpha^{-i})
         xs.append(xi)
         if dn == 0:
+            # denominator is zero -> y = infinity (pole in the rational curve)
             ys.append(0); isinf.append(True)
         else:
             ys.append(gf_div(lv, dn)); isinf.append(False)
@@ -938,45 +1127,51 @@ def _py_wu_decode(n, k, received, t_target=None, verbose=False):
         n_inf = sum(isinf)
         print(f"    {n} rational points ({n - n_inf} finite, {n_inf} at infinity)")
 
+    # Step 5: Build and solve the interpolation matrix
     mons = monomial_list(Ly, LQ, w)
-    nu = len(mons)
-    max_c = n * m * (m + 1) // 2
+    nu = len(mons)     # number of unknowns (N_coeff)
+    max_c = n * m * (m + 1) // 2  # number of constraints (N_eq)
     if max_c > 2000 or nu > 2000:
+        # safety limit: matrix too large, abort to protect RAM
         return [msg_u] if msg_u else []
 
     rows = build_interp(xs, ys, isinf, m, mons, Ly)
-    rows = [r for r in rows if any(v != 0 for v in r)]
+    rows = [r for r in rows if any(v != 0 for v in r)]  # remove trivial rows
     nc = len(rows)
     if verbose: print(f"    Interpolation matrix: ({nc}, {nu})")
 
+    # find null space -> coefficients of bivariate polynomial Q(x,y)
     Ns = nullspace(rows)
     if not Ns:
         return [msg_u] if msg_u else []
     if verbose: print(f"    Nullspace dim: {len(Ns)}")
 
+    # Step 6: Extract power series from Q(x,y) and recover error locators
     all_cands = []
     total_series = 0
-    K = Ls + 1
-    for vi, vec in enumerate(Ns[:10]):
+    K = Ls + 1  # required series precision
+    for vi, vec in enumerate(Ns[:10]):  # try up to 10 null-space vectors
         Q = vec_to_Q(vec, mons, Ly)
 
-        # Hensel first, RR fallback
+        # try Hensel lifting first (fast, quadratic convergence)
         slist = hensel_series(Q, K, max_roots=64)
-        
 
+        # if Hensel fails (e.g., zero derivative), fall back to Roth-Ruckenstein
         if not slist:
             slist = rr_series(Q, K, max_br=64)
 
         total_series += len(slist)
+        # Step 7: for each power series, synthesize genuine error locator
         for series in slist:
             cands = recover_from_series(n, k, series, Lambda, B, L_Lam, L_xB, t, t0, received)
             all_cands.extend(cands)
 
         if all_cands:
-            break
+            break  # found valid candidates, no need to try more null vectors
 
     if verbose: print(f"    {total_series} power series, {len(all_cands)} candidates after recovery")
 
+    # include the BM unique-decode result if it exists
     if msg_u: all_cands.append(msg_u)
 
     return dedup(k, all_cands)
@@ -988,15 +1183,19 @@ def wu_decode(n, k, received, t_target=None, verbose=False):
     return _py_wu_decode(n, k, received, t_target, verbose)
 
 def _try_unique(n, k, Lambda, received, syns):
+    """Attempt standard unique decoding using the BM error locator.
+    If Lambda has valid roots (Chien search succeeds) and root count matches
+    its degree, we can decode uniquely. Returns None if unique decode fails."""
     L = pdeg(Lambda)
     if L <= 0:
         if all(s == 0 for s in syns): return extract_message(n, k, received)
         return None
     err_pos = chien_search(Lambda, n)
-    if len(err_pos) != L: return None
+    if len(err_pos) != L: return None  # roots don't match degree -> BM failed
     return decode_from_positions(n, k, err_pos, received)
 
 def dedup(k, cands):
+    """Remove duplicate candidate messages from the list."""
     seen = set(); out = []
     for f in cands:
         fp = tuple((f + [0] * k)[:k])
