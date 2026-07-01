@@ -1,6 +1,7 @@
-# List Decoding of QR Codes (Interactive Visualizer)
+# List Decoding of QR Codes
 
-Welcome to the **List Decoding of QR Codes** interactive web application! 
+Welcome to the **List Decoding of QR Codes** interactive web application!
+
 🌐 **Live Demo:** [https://list-decoding-of-qr-codes.streamlit.app/](https://list-decoding-of-qr-codes.streamlit.app/)
 
 This application was developed as part of a Master's Thesis Project (MTP) at the CSE Department, IIT Bombay. It is a powerful, educational visualization tool built with Streamlit that allows you to explore the inner workings of QR codes, understand their physical layout, and most importantly, experiment with **Wu's List Decoding Algorithm**.
@@ -44,7 +45,7 @@ Make sure you have Python 3.8+ installed on your machine.
 1. **Clone the repository** (if you haven't already):
    ```bash
    git clone <your-repository-url>
-   cd List-Decoding-of-QR-codes-AG
+   cd List-Decoding-of-QR-codes
    ```
 
 2. **Install the required dependencies:**
